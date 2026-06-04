@@ -1,0 +1,21 @@
+{
+  "name": "fieldcast-ops-weather-intelligence",
+  "version": "0.1.0",
+  "private": true,
+  "description": "FieldCast Ops is a multi-tenant weather operations platform for working windows, incidents, and provider usage intelligence.",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev --workspace apps/api\" \"npm run dev --workspace apps/web\"",
+    "build": "npm run build --workspace apps/api && npm run build --workspace apps/web",
+    "typecheck": "npm run typecheck --workspace apps/api && npm run typecheck --workspace apps/web",
+    "prisma:generate": "npm run prisma:generate --workspace apps/api"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  },
+  "engines": {
+    "node": ">=20.11.0"
+  }
+}

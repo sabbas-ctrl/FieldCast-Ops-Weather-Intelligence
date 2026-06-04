@@ -1,0 +1,335 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum WorkspaceType {
+  PERSONAL
+  ORGANISATION
+}
+
+enum ProviderMode {
+  PLATFORM_MANAGED
+  ORGANISATION_CONNECTED
+}
+
+enum MemberRole {
+  PERSONAL_OWNER
+  ORG_OWNER
+  IT_ADMIN
+  OPS_ADMIN
+  TEAM_MEMBER
+  VIEWER
+}
+
+enum MemberStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum ConnectionStatus {
+  ACTIVE
+  DISCONNECTED
+  FAILED
+}
+
+enum CapabilityTier {
+  FREE
+  PRO
+  SCALE
+  UNKNOWN
+}
+
+enum SiteType {
+  FIELD_WORK_SITE
+  FARM_PLANTATION
+  CONSTRUCTION_SITE
+  DELIVERY_HUB
+  EVENT_VENUE
+  CAMPUS_OUTDOOR_FACILITY
+  OTHER
+}
+
+enum Units {
+  METRIC
+  IMPERIAL
+}
+
+enum HazardType {
+  RAIN
+  HIGH_TEMPERATURE
+  HIGH_WIND
+  FROST
+}
+
+enum Severity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum IncidentStatus {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+  DISMISSED
+}
+
+model User {
+  id           String            @id @default(cuid())
+  fullName     String
+  email        String            @unique
+  passwordHash String
+  status       String            @default("ACTIVE")
+  createdAt    DateTime          @default(now())
+  memberships  WorkspaceMember[]
+  sessions     Session[]
+  invitations  Invitation[]      @relation("InvitationCreator")
+}
+
+model Workspace {
+  id             String                  @id @default(cuid())
+  name           String
+  type           WorkspaceType
+  providerMode   ProviderMode
+  country        String?
+  timezone       String                  @default("UTC")
+  createdAt      DateTime                @default(now())
+  members        WorkspaceMember[]
+  invitations    Invitation[]
+  connections    ProviderConnection[]
+  usageSnapshots ProviderUsageSnapshot[]
+  usageEvents    UsageEvent[]
+  sites          Site[]
+  riskRules      RiskRule[]
+  incidents      Incident[]
+  auditLogs      AuditLog[]
+}
+
+model WorkspaceMember {
+  id                  String          @id @default(cuid())
+  workspaceId         String
+  userId              String
+  role                MemberRole
+  weatherUsageEnabled Boolean         @default(true)
+  status              MemberStatus    @default(ACTIVE)
+  joinedAt            DateTime        @default(now())
+  workspace           Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user                User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessions            Session[]
+  usageEvents         UsageEvent[]
+  auditLogs           AuditLog[]
+  incidentActions     IncidentAction[]
+
+  @@unique([workspaceId, userId])
+  @@index([workspaceId])
+  @@index([userId])
+}
+
+model Invitation {
+  id          String     @id @default(cuid())
+  workspaceId String
+  email       String
+  role        MemberRole
+  tokenHash   String
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  createdBy   String
+  createdAt   DateTime   @default(now())
+  workspace   Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  creator     User       @relation("InvitationCreator", fields: [createdBy], references: [id])
+
+  @@index([workspaceId])
+}
+
+model Session {
+  id          String          @id @default(cuid())
+  userId      String
+  memberId    String
+  refreshHash String
+  revokedAt   DateTime?
+  expiresAt   DateTime
+  createdAt   DateTime        @default(now())
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  member      WorkspaceMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([memberId])
+}
+
+model ProviderConnection {
+  id               String           @id @default(cuid())
+  workspaceId      String
+  providerName     String           @default("WeatherAI")
+  encryptedApiKey  String
+  maskedKey        String
+  connectionStatus ConnectionStatus @default(ACTIVE)
+  capabilityTier   CapabilityTier   @default(UNKNOWN)
+  requestLimit     Int?
+  aiRequestLimit   Int?
+  forecastDays     Int?
+  webhooksEnabled  Boolean          @default(false)
+  smsEligible      Boolean          @default(false)
+  smsApproved      Boolean          @default(false)
+  lastVerifiedAt   DateTime?
+  createdAt        DateTime         @default(now())
+  workspace        Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+}
+
+model ProviderUsageSnapshot {
+  id             String    @id @default(cuid())
+  workspaceId    String
+  requestsUsed   Int
+  requestLimit   Int
+  aiRequestsUsed Int
+  aiRequestLimit Int
+  periodStart    DateTime?
+  periodEnd      DateTime?
+  capturedAt     DateTime  @default(now())
+  workspace      Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+}
+
+model UsageEvent {
+  id              String           @id @default(cuid())
+  workspaceId     String
+  memberId        String?
+  siteId          String?
+  endpoint        String
+  feature         String
+  aiEnabled       Boolean          @default(false)
+  servedFromCache Boolean          @default(false)
+  providerCalled  Boolean          @default(false)
+  responseStatus  Int
+  durationMs      Int
+  createdAt       DateTime         @default(now())
+  workspace       Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  member          WorkspaceMember? @relation(fields: [memberId], references: [id])
+  site            Site?            @relation(fields: [siteId], references: [id])
+
+  @@index([workspaceId])
+  @@index([memberId])
+  @@index([siteId])
+}
+
+model Site {
+  id                String             @id @default(cuid())
+  workspaceId       String
+  name              String
+  description       String?
+  siteType          SiteType
+  country           String
+  latitude          Float
+  longitude         Float
+  timezone          String             @default("UTC")
+  units             Units              @default(METRIC)
+  monitoringEnabled Boolean            @default(false)
+  createdBy         String?
+  createdAt         DateTime           @default(now())
+  workspace         Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  rules             RiskRule[]
+  snapshots         ForecastSnapshot[]
+  incidents         Incident[]
+  usageEvents       UsageEvent[]
+
+  @@index([workspaceId])
+}
+
+model RiskRule {
+  id              String     @id @default(cuid())
+  workspaceId     String
+  siteId          String
+  hazardType      HazardType
+  mediumThreshold Float
+  highThreshold   Float
+  enabled         Boolean    @default(true)
+  recommendation  String
+  createdBy       String?
+  createdAt       DateTime   @default(now())
+  workspace       Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  site            Site       @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  incidents       Incident[]
+
+  @@index([workspaceId])
+  @@index([siteId])
+}
+
+model ForecastSnapshot {
+  id           String    @id @default(cuid())
+  workspaceId  String
+  siteId       String
+  forecastType String
+  aiEnabled    Boolean   @default(false)
+  payloadJson  Json
+  fetchedAt    DateTime  @default(now())
+  expiresAt    DateTime
+  site         Site      @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([siteId])
+}
+
+model Incident {
+  id               String             @id @default(cuid())
+  workspaceId      String
+  siteId           String
+  ruleId           String?
+  severity         Severity
+  title            String
+  reason           String
+  recommendation   String
+  forecastStart    DateTime
+  forecastEnd      DateTime
+  observedValue    Float?
+  thresholdValue   Float?
+  deduplicationKey String
+  status           IncidentStatus     @default(OPEN)
+  acknowledgedBy   String?
+  acknowledgedAt   DateTime?
+  resolvedBy       String?
+  resolvedAt       DateTime?
+  createdAt        DateTime           @default(now())
+  workspace        Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  site             Site               @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  rule             RiskRule?          @relation(fields: [ruleId], references: [id])
+  actions          IncidentAction[]
+
+  @@unique([workspaceId, deduplicationKey])
+  @@index([workspaceId])
+  @@index([siteId])
+}
+
+model IncidentAction {
+  id         String          @id @default(cuid())
+  incidentId String
+  memberId   String?
+  action     String
+  note       String?
+  createdAt  DateTime        @default(now())
+  incident   Incident        @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  member     WorkspaceMember? @relation(fields: [memberId], references: [id])
+}
+
+model AuditLog {
+  id            String           @id @default(cuid())
+  workspaceId   String
+  actorMemberId String?
+  action        String
+  targetType    String
+  targetId      String?
+  metadataJson  Json?
+  createdAt     DateTime         @default(now())
+  workspace     Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  actor         WorkspaceMember? @relation(fields: [actorMemberId], references: [id])
+
+  @@index([workspaceId])
+  @@index([actorMemberId])
+}
