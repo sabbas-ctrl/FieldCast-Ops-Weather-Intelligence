@@ -332,7 +332,7 @@ The Docker image does not include production environment values. Provide them on
 
 ## Docker Hub Workflow
 
-The GitHub Actions workflow `.github/workflows/deploy-api.yml` validates the API and pushes the backend Docker image to Docker Hub.
+The GitHub Actions workflow `.github/workflows/deploy-api.yml` validates the API and pushes the backend Docker image to Docker Hub. It is separate from Vercel; Vercel deploys only the frontend from `apps/web`.
 
 The Docker image publish job uses the GitHub Environment named:
 
