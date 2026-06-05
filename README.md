@@ -376,7 +376,7 @@ Recommended Vercel import settings:
 - Framework Preset: `Vite`
 - Root Directory: repository root, not `apps/web`
 - Install Command: `npm ci`
-- Build Command: `npm run build:web`
+- Build Command: `npm run build`
 - Output Directory: `apps/web/dist`
 
 Set this Vercel environment variable for Production and Preview:
@@ -430,6 +430,7 @@ Place Nginx, Caddy, or another reverse proxy in front of port `4000` for HTTPS.
 ```bash
 npm run typecheck
 npm run build
+npm run build:all
 npm run prisma:generate --workspace apps/api
 npm run prisma:migrate --workspace apps/api -- --name init
 npm run db:seed
@@ -440,6 +441,7 @@ PowerShell equivalents:
 ```powershell
 npm.cmd run typecheck
 npm.cmd run build
+npm.cmd run build:all
 npm.cmd run prisma:generate --workspace apps/api
 npm.cmd run prisma:migrate --workspace apps/api -- --name init
 npm.cmd run db:seed
