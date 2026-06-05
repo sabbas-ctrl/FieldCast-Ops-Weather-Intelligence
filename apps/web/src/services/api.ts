@@ -2,13 +2,15 @@ import type {
   AnalysisResult,
   AuditLog,
   AuthPayload,
+  ForecastResult,
   Incident,
   LocationResult,
   Member,
   ProviderStatus,
   RiskRule,
   Site,
-  UsageSummary
+  UsageSummary,
+  WeatherAiCapabilities
 } from "../types/domain";
 
 const API_URL = import.meta.env.VITE_API_URL ?? "";
@@ -83,6 +85,49 @@ async function request<T>(path: string, options: RequestInit = {}, retryOnUnauth
   return (await response.json()) as T;
 }
 
+async function requestForm<T>(path: string, formData: FormData, retryOnUnauthorized = true): Promise<T> {
+  const token = getStoredToken();
+  const response = await fetch(`${API_URL}${path}`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {})
+    },
+    body: formData
+  });
+
+  if (response.status === 401 && retryOnUnauthorized && token) {
+    await refreshAccessToken();
+    return requestForm<T>(path, formData, false);
+  }
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new ApiError(payload?.error ?? `Request failed with ${response.status}`, response.status);
+  }
+
+  return (await response.json()) as T;
+}
+
+function weatherAiParams(input: {
+  siteId?: string;
+  lat?: number;
+  lon?: number;
+  days?: number;
+  ai?: boolean;
+  units?: "metric" | "imperial";
+  lang?: string;
+  ip?: string;
+}) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(input)) {
+    if (value !== undefined && value !== "") {
+      params.set(key, String(value));
+    }
+  }
+  return params.toString();
+}
+
 export const api = {
   async demoLogin() {
     const payload = await request<AuthPayload>("/api/auth/login", {
@@ -151,6 +196,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ days: 2 })
     }),
+  forecast: (siteId: string, days = 7) => request<ForecastResult>(`/api/sites/${siteId}/forecast?${new URLSearchParams({ days: String(days) }).toString()}`),
   incidents: () => request<Incident[]>("/api/incidents"),
   acknowledgeIncident: (incidentId: string) =>
     request<Incident>(`/api/incidents/${incidentId}/acknowledge`, { method: "PATCH" }),
@@ -175,6 +221,42 @@ export const api = {
       body: JSON.stringify({ email, role })
     }),
   auditLogs: () => request<AuditLog[]>("/api/audit-logs"),
+  weatherAiCapabilities: () => request<WeatherAiCapabilities>("/api/weatherai/capabilities"),
+  weatherAiWeather: (input: { siteId?: string; lat?: number; lon?: number; days?: number; ai?: boolean; units?: "metric" | "imperial"; lang?: string }) =>
+    request<unknown>(`/api/weatherai/weather?${weatherAiParams(input)}`),
+  weatherAiForecast: (input: { siteId?: string; lat?: number; lon?: number; days?: number; ai?: boolean; units?: "metric" | "imperial"; lang?: string }) =>
+    request<unknown>(`/api/weatherai/forecast?${weatherAiParams(input)}`),
+  weatherAiWeatherGeo: (input: { siteId?: string; lat?: number; lon?: number; ip?: string; days?: number; ai?: boolean; units?: "metric" | "imperial"; lang?: string }) =>
+    request<unknown>(`/api/weatherai/weather-geo?${weatherAiParams(input)}`),
+  weatherAiIpLookup: (ip = "auto") => request<unknown>(`/api/weatherai/ip-lookup?${new URLSearchParams({ ip }).toString()}`),
+  weatherAiWebhooks: () => request<unknown>("/api/weatherai/webhooks"),
+  weatherAiCreateWebhook: (input: { url: string; siteId?: string; lat?: number; lon?: number; triggers: string[]; timezone?: string }) =>
+    request<unknown>("/api/weatherai/webhooks", {
+      method: "POST",
+      body: JSON.stringify(input)
+    }),
+  weatherAiDeleteWebhook: (webhookId: string) =>
+    request<unknown>(`/api/weatherai/webhooks/${encodeURIComponent(webhookId)}`, { method: "DELETE" }),
+  weatherAiSmsSend: (input: { to: string; message: string; type?: string; pilotTag?: string }) =>
+    request<unknown>("/api/weatherai/sms/send", {
+      method: "POST",
+      body: JSON.stringify(input)
+    }),
+  weatherAiSmsAlert: (input: { to: string; alertType: string; data?: Record<string, unknown> }) =>
+    request<unknown>("/api/weatherai/sms/alert", {
+      method: "POST",
+      body: JSON.stringify(input)
+    }),
+  weatherAiBometRegister: (input: { phone: string; name: string; location?: string; cropType?: string }) =>
+    request<unknown>("/api/weatherai/sms/bomet/register", {
+      method: "POST",
+      body: JSON.stringify(input)
+    }),
+  weatherAiSmsStats: () => request<unknown>("/api/weatherai/sms/stats"),
+  weatherAiSmsHealth: () => request<unknown>("/api/weatherai/sms/health"),
+  weatherAiTreeHistory: () => request<unknown>("/api/weatherai/trees/history"),
+  weatherAiTreeQuota: () => request<unknown>("/api/weatherai/trees/quota"),
+  weatherAiTreeAnalyze: (formData: FormData) => requestForm<unknown>("/api/weatherai/trees/analyze", formData),
   searchLocations: (query: string, countryCode?: string) => {
     const params = new URLSearchParams({ q: query });
     if (countryCode) {

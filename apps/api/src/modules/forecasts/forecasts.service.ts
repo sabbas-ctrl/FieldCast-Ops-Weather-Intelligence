@@ -317,8 +317,14 @@ function findHourlyEntries(payload: unknown) {
   const candidates = [
     getPath(payload, ["hourly"]),
     getPath(payload, ["data", "hourly"]),
+    getPath(payload, ["forecast"]),
     getPath(payload, ["forecast", "hourly"]),
     getPath(payload, ["forecast", "hours"]),
+    getPath(payload, ["forecast", "forecastday"]),
+    getPath(payload, ["daily"]),
+    getPath(payload, ["data", "daily"]),
+    getPath(payload, ["days"]),
+    getPath(payload, ["data", "days"]),
     getPath(payload, ["hours"]),
     getPath(payload, ["data", "hours"]),
     getPath(payload, ["data", "forecast"]),
@@ -327,6 +333,21 @@ function findHourlyEntries(payload: unknown) {
 
   for (const candidate of candidates) {
     if (Array.isArray(candidate)) {
+      const nestedHours = candidate.flatMap((entry) => {
+        if (isRecord(entry) && Array.isArray(entry.hour)) {
+          return entry.hour;
+        }
+        if (isRecord(entry) && Array.isArray(entry.hours)) {
+          return entry.hours;
+        }
+        if (isRecord(entry) && Array.isArray(entry.hourly)) {
+          return entry.hourly;
+        }
+        return [entry];
+      });
+      if (nestedHours.length > 0) {
+        return nestedHours;
+      }
       return candidate;
     }
 
@@ -453,7 +474,7 @@ async function fetchWeatherAiHourly(site: Site, provider: WeatherProviderContext
     throw new HttpError(503, "WeatherAI API key is missing.");
   }
 
-  const url = new URL("/v1/hourly", env.WEATHERAI_BASE_URL);
+  const url = new URL("/v1/forecast", env.WEATHERAI_BASE_URL);
   url.searchParams.set("lat", String(site.latitude));
   url.searchParams.set("lon", String(site.longitude));
   url.searchParams.set("days", String(days));
@@ -470,7 +491,7 @@ async function fetchWeatherAiHourly(site: Site, provider: WeatherProviderContext
 
   if (!response.ok) {
     const status = response.status === 401 || response.status === 403 ? 502 : response.status;
-    throw new HttpError(status, `WeatherAI hourly forecast failed with provider status ${response.status}`);
+    throw new HttpError(status, `WeatherAI forecast failed with provider status ${response.status}`);
   }
 
   return normalizeWeatherAiHourly((await response.json()) as unknown, hours);

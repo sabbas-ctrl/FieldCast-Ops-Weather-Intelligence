@@ -127,6 +127,40 @@ export type ProviderStatus = {
   } | null;
 };
 
+export type WeatherAiCapabilities = {
+  mode: "PLATFORM_MANAGED" | "ORGANISATION_CONNECTED";
+  source: "platform" | "organisation";
+  capabilities: {
+    plan: "FREE" | "PRO" | "SCALE" | "UNKNOWN";
+    requestLimit: number;
+    aiRequestLimit: number;
+    forecastDays: number;
+    webhooksEnabled: boolean;
+    webhookLimit: number;
+    smsEligible: boolean;
+    smsApproved: boolean;
+    treeAnalysisLimit: number | null;
+    teamSeats: number;
+  };
+  services: Array<{
+    key: "weather" | "forecast" | "weatherGeo" | "ipLookup" | "usage" | "webhooks" | "sms" | "trees";
+    label: string;
+    providerPath: string;
+    minimumPlan: "FREE" | "PRO" | "SCALE" | "UNKNOWN";
+    enabled: boolean;
+    reason: string | null;
+  }>;
+  usage: {
+    requestsUsed: number;
+    requestLimit: number;
+    aiRequestsUsed: number;
+    aiRequestLimit: number;
+    periodStart: string;
+    periodEnd: string;
+    capturedAt: string;
+  } | null;
+};
+
 export type EvaluatedHour = {
   timestamp: string;
   temperatureC: number;
@@ -134,6 +168,20 @@ export type EvaluatedHour = {
   windSpeedKph: number;
   condition: string;
   riskLevel: "LOW" | "MEDIUM" | "HIGH";
+};
+
+export type HourlyForecast = {
+  timestamp: string;
+  temperatureC: number;
+  precipitationProbability: number;
+  windSpeedKph: number;
+  condition: string;
+};
+
+export type ForecastResult = {
+  site: Site;
+  hourly: HourlyForecast[];
+  servedFromCache: boolean;
 };
 
 export type AnalysisResult = {

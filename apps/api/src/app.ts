@@ -15,6 +15,7 @@ import { auditRouter } from "./modules/audit/audit.routes.js";
 import { workspaceRouter } from "./modules/workspaces/workspaces.routes.js";
 import { invitationRouter } from "./modules/invitations/invitations.routes.js";
 import { locationsRouter } from "./modules/locations/locations.routes.js";
+import { weatherAiRouter } from "./modules/weatherai/weatherai.routes.js";
 import { errorHandler, notFoundHandler } from "./utils/http.js";
 
 const openApiDocument = {
@@ -28,6 +29,7 @@ const openApiDocument = {
     "/api/auth/register/individual": { post: { summary: "Register an individual workspace" } },
     "/api/auth/register/organisation": { post: { summary: "Register an organisation workspace" } },
     "/api/provider/connect": { post: { summary: "Verify and connect a WeatherAI key" } },
+    "/api/weatherai/capabilities": { get: { summary: "List active WeatherAI plan services for the workspace" } },
     "/api/sites/{siteId}/analyse-working-windows": { post: { summary: "Evaluate hourly forecasts against risk rules" } }
   }
 };
@@ -59,6 +61,7 @@ export function createApp() {
   app.use("/api/workspaces", workspaceRouter);
   app.use("/api", invitationRouter);
   app.use("/api/provider", providerRouter);
+  app.use("/api/weatherai", weatherAiRouter);
   app.use("/api/sites", siteRouter);
   app.use("/api", ruleRouter);
   app.use("/api/sites", forecastRouter);

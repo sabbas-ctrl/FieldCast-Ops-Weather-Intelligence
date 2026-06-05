@@ -39,16 +39,18 @@ import type {
   AnalysisResult,
   AuditLog,
   AuthPayload,
+  ForecastResult,
   Incident,
   LocationResult,
   Member,
   ProviderStatus,
   RiskRule,
   Site,
-  UsageSummary
+  UsageSummary,
+  WeatherAiCapabilities
 } from "./types/domain";
 
-type View = "overview" | "sites" | "rules" | "incidents" | "provider" | "members" | "audit";
+type View = "overview" | "forecast" | "sites" | "rules" | "incidents" | "services" | "provider" | "members" | "audit";
 
 countries.registerLocale(enCountries);
 
@@ -189,6 +191,141 @@ const timezoneOptions = rawTimezoneOptions
     label: `(${formatUtcOffset(getTimezoneOffsetMinutes(timeZone))}) ${timeZone}`
   }))
   .sort((left, right) => left.offsetMinutes - right.offsetMinutes || left.value.localeCompare(right.value));
+
+function conditionLabel(value: string) {
+  return value.replace(/[_-]/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function zonedDayKey(value: string, timeZone = "UTC") {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(new Date(value));
+  const mapped = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${mapped.year}-${mapped.month}-${mapped.day}`;
+}
+
+function formatDayHeading(value: string, timeZone = "UTC") {
+  return new Intl.DateTimeFormat(undefined, {
+    timeZone,
+    weekday: "short",
+    month: "short",
+    day: "numeric"
+  }).format(new Date(value));
+}
+
+function formatHour(value: string, timeZone = "UTC") {
+  return new Intl.DateTimeFormat(undefined, {
+    timeZone,
+    hour: "numeric"
+  }).format(new Date(value));
+}
+
+function dailyForecastCards(forecast: ForecastResult | null) {
+  if (!forecast) {
+    return [];
+  }
+
+  const groups = new Map<string, ForecastResult["hourly"]>();
+  const timeZone = forecast.site.timezone;
+  for (const hour of [...forecast.hourly].sort((left, right) => Date.parse(left.timestamp) - Date.parse(right.timestamp))) {
+    const key = zonedDayKey(hour.timestamp, timeZone);
+    groups.set(key, [...(groups.get(key) ?? []), hour]);
+  }
+
+  return [...groups.entries()].slice(0, 7).map(([key, hours], index) => {
+    const conditionCounts = new Map<string, number>();
+    for (const hour of hours) {
+      conditionCounts.set(hour.condition, (conditionCounts.get(hour.condition) ?? 0) + 1);
+    }
+    const condition = [...conditionCounts.entries()].sort((left, right) => right[1] - left[1])[0]?.[0] ?? "clear";
+    const temperatures = hours.map((hour) => hour.temperatureC);
+    const rain = hours.map((hour) => hour.precipitationProbability);
+    const wind = hours.map((hour) => hour.windSpeedKph);
+
+    return {
+      key,
+      label: index === 0 ? "Today" : formatDayHeading(hours[0]?.timestamp ?? new Date().toISOString(), timeZone),
+      date: formatDayHeading(hours[0]?.timestamp ?? new Date().toISOString(), timeZone),
+      condition,
+      minTemp: Math.round(Math.min(...temperatures)),
+      maxTemp: Math.round(Math.max(...temperatures)),
+      maxRain: Math.round(Math.max(...rain)),
+      maxWind: Math.round(Math.max(...wind))
+    };
+  });
+}
+
+function todayHourlyForecast(forecast: ForecastResult | null) {
+  if (!forecast) {
+    return [];
+  }
+
+  const timeZone = forecast.site.timezone;
+  const todayKey = zonedDayKey(new Date().toISOString(), timeZone);
+  const todayHours = forecast.hourly.filter((hour) => zonedDayKey(hour.timestamp, timeZone) === todayKey);
+  return (todayHours.length > 0 ? todayHours : forecast.hourly.slice(0, 24)).slice(0, 24);
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function serviceResultHighlights(result: unknown) {
+  if (Array.isArray(result)) {
+    return [{ label: "Items", value: String(result.length) }];
+  }
+  if (!isPlainRecord(result)) {
+    return [{ label: "Result", value: String(result ?? "Completed") }];
+  }
+
+  const webhooks = Array.isArray(result.webhooks) ? result.webhooks : undefined;
+  const features = Array.isArray(result.features) ? result.features : undefined;
+  const highlights: Array<{ label: string; value: string }> = [];
+  const preferredKeys = [
+    "plan",
+    "remaining",
+    "used",
+    "limit",
+    "gateway",
+    "fallback",
+    "latencyMs",
+    "treeCount",
+    "tree_count",
+    "density",
+    "health",
+    "status",
+    "message",
+    "id"
+  ];
+
+  if (webhooks) {
+    highlights.push({ label: "Webhooks", value: String(webhooks.length) });
+  }
+  if (features) {
+    highlights.push({ label: "Features", value: String(features.length) });
+  }
+
+  for (const key of preferredKeys) {
+    const value = result[key];
+    if (["string", "number", "boolean"].includes(typeof value)) {
+      highlights.push({ label: key.replace(/_/g, " "), value: String(value) });
+    }
+  }
+
+  if (highlights.length === 0) {
+    const scalarEntries = Object.entries(result).filter(([, value]) => ["string", "number", "boolean"].includes(typeof value));
+    highlights.push(...scalarEntries.slice(0, 6).map(([key, value]) => ({ label: key.replace(/_/g, " "), value: String(value) })));
+  }
+
+  if (highlights.length === 0) {
+    highlights.push({ label: "Status", value: "Completed" });
+  }
+
+  return highlights.slice(0, 8);
+}
 
 function AuthScreen({ onAuthed }: { onAuthed: (payload: AuthPayload) => void }) {
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
@@ -343,7 +480,7 @@ function AuthScreen({ onAuthed }: { onAuthed: (payload: AuthPayload) => void }) 
                 <div>
                   <h2 className="text-xl font-bold text-ink">Register</h2>
                   <p className="mt-1 text-sm text-slate-500">
-                    Personal accounts use FieldCast-managed demo weather access. Organisations connect their own WeatherAI key.
+                    Personal accounts use FieldCast-managed Free WeatherAI access. Organisations connect their own WeatherAI key.
                   </p>
                 </div>
                 <div className="flex rounded-md bg-slate-100 p-1">
@@ -487,8 +624,21 @@ export function App() {
   const [rules, setRules] = useState<RiskRule[]>([]);
   const [ruleDrafts, setRuleDrafts] = useState<Record<string, Partial<RiskRule>>>({});
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
+  const [forecast, setForecast] = useState<ForecastResult | null>(null);
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [provider, setProvider] = useState<ProviderStatus | null>(null);
+  const [weatherAiCapabilities, setWeatherAiCapabilities] = useState<WeatherAiCapabilities | null>(null);
+  const [weatherAiOutput, setWeatherAiOutput] = useState<unknown | null>(null);
+  const [weatherAiIp, setWeatherAiIp] = useState("auto");
+  const [weatherAiWebhookUrl, setWeatherAiWebhookUrl] = useState("");
+  const [weatherAiWebhookTrigger, setWeatherAiWebhookTrigger] = useState("rain");
+  const [weatherAiWebhookDeleteId, setWeatherAiWebhookDeleteId] = useState("");
+  const [weatherAiSmsTo, setWeatherAiSmsTo] = useState("");
+  const [weatherAiSmsMessage, setWeatherAiSmsMessage] = useState("");
+  const [weatherAiSmsAlertType, setWeatherAiSmsAlertType] = useState("rain");
+  const [weatherAiTreeFile, setWeatherAiTreeFile] = useState<File | null>(null);
+  const [weatherAiTreeCounty, setWeatherAiTreeCounty] = useState("");
+  const [weatherAiTreeLandAcres, setWeatherAiTreeLandAcres] = useState("");
   const [usage, setUsage] = useState<UsageSummary | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
@@ -504,6 +654,7 @@ export function App() {
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const selectedSiteIdRef = useRef("");
   const loadedRulesForSiteIdRef = useRef("");
+  const loadedForecastForSiteIdRef = useRef("");
   const workspaceIdRef = useRef<string | null>(null);
 
   const selectedSite = useMemo(
@@ -533,13 +684,17 @@ export function App() {
   function clearWorkspaceData() {
     selectedSiteIdRef.current = "";
     loadedRulesForSiteIdRef.current = "";
+    loadedForecastForSiteIdRef.current = "";
     setSites([]);
     setSelectedSiteId("");
     setRules([]);
     setRuleDrafts({});
     setAnalysis(null);
+    setForecast(null);
     setIncidents([]);
     setProvider(null);
+    setWeatherAiCapabilities(null);
+    setWeatherAiOutput(null);
     setUsage(null);
     setMembers([]);
     setAuditLogs([]);
@@ -578,15 +733,17 @@ export function App() {
     }
 
     try {
-      const canViewProvider = ["PERSONAL_OWNER", "ORG_OWNER", "IT_ADMIN", "OPS_ADMIN", "VIEWER"].includes(me.member.role);
+      const canViewProvider = me.workspace.type === "ORGANISATION" && ["ORG_OWNER", "IT_ADMIN", "OPS_ADMIN", "VIEWER"].includes(me.member.role);
+      const canViewUsage = ["PERSONAL_OWNER", "ORG_OWNER", "IT_ADMIN", "OPS_ADMIN", "VIEWER"].includes(me.member.role);
       const canViewMembers = ["ORG_OWNER", "IT_ADMIN", "OPS_ADMIN"].includes(me.member.role);
       const canViewAudit = ["ORG_OWNER", "IT_ADMIN", "OPS_ADMIN"].includes(me.member.role);
 
-      const [siteResult, incidentResult, providerResult, usageResult, memberResult, auditResult] = await Promise.allSettled([
+      const [siteResult, incidentResult, providerResult, usageResult, weatherAiResult, memberResult, auditResult] = await Promise.allSettled([
         api.sites(),
         api.incidents(),
         canViewProvider ? api.provider() : Promise.resolve(null),
-        canViewProvider ? api.usageSummary() : Promise.resolve(null),
+        canViewUsage ? api.usageSummary() : Promise.resolve(null),
+        api.weatherAiCapabilities(),
         canViewMembers ? api.members(me.workspace.id) : Promise.resolve([]),
         canViewAudit ? api.auditLogs() : Promise.resolve([])
       ]);
@@ -617,6 +774,9 @@ export function App() {
       if (usageResult.status === "fulfilled") {
         setUsage(usageResult.value);
       }
+      if (weatherAiResult.status === "fulfilled") {
+        setWeatherAiCapabilities(weatherAiResult.value);
+      }
       if (memberResult.status === "fulfilled") {
         setMembers(memberResult.value);
       }
@@ -624,7 +784,7 @@ export function App() {
         setAuditLogs(auditResult.value);
       }
 
-      const firstFailure = [siteResult, incidentResult, providerResult, usageResult, memberResult, auditResult].find(
+      const firstFailure = [siteResult, incidentResult, providerResult, usageResult, weatherAiResult, memberResult, auditResult].find(
         (result) => result.status === "rejected"
       ) as PromiseRejectedResult | undefined;
       if (firstFailure?.reason instanceof ApiError && firstFailure.reason.status === 401) {
@@ -656,6 +816,18 @@ export function App() {
     }
   }, [loadRules, selectedSiteId]);
 
+  useEffect(() => {
+    if (auth?.workspace.type === "PERSONAL" && view === "provider") {
+      setView("overview");
+    }
+  }, [auth?.workspace.type, view]);
+
+  useEffect(() => {
+    if (view === "forecast" && selectedSiteId && loadedForecastForSiteIdRef.current !== selectedSiteId) {
+      void loadForecast(selectedSiteId);
+    }
+  }, [selectedSiteId, view]);
+
   async function runAnalysis(siteId = selectedSite?.id) {
     if (!siteId) {
       return;
@@ -675,6 +847,51 @@ export function App() {
       setView("overview");
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : "Analysis failed";
+      setError(message);
+      setNotice(message);
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function loadForecast(siteId = selectedSite?.id) {
+    if (!siteId) {
+      return;
+    }
+    setBusyAction("forecast");
+    setError(null);
+    try {
+      const result = await api.forecast(siteId, Math.min(weatherAiPlan?.forecastDays ?? 7, 7));
+      setForecast(result);
+      loadedForecastForSiteIdRef.current = siteId;
+      await api.usageSummary().then(setUsage).catch(() => undefined);
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : "Forecast failed";
+      setError(message);
+      setNotice(message);
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  function isWeatherAiServiceEnabled(key: WeatherAiCapabilities["services"][number]["key"]) {
+    return Boolean(weatherAiCapabilities?.services.find((service) => service.key === key)?.enabled);
+  }
+
+  function weatherAiServiceReason(key: WeatherAiCapabilities["services"][number]["key"]) {
+    return weatherAiCapabilities?.services.find((service) => service.key === key)?.reason;
+  }
+
+  async function runWeatherAiAction(label: string, action: () => Promise<unknown>) {
+    setBusyAction(`weatherai:${label}`);
+    setError(null);
+    try {
+      const result = await action();
+      setWeatherAiOutput({ label, ranAt: new Date().toISOString(), result });
+      await api.weatherAiCapabilities().then(setWeatherAiCapabilities).catch(() => undefined);
+      await api.usageSummary().then(setUsage).catch(() => undefined);
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : "WeatherAI request failed";
       setError(message);
       setNotice(message);
     } finally {
@@ -713,16 +930,24 @@ export function App() {
       rain: hour.precipitationProbability,
       wind: hour.windSpeedKph
     })) ?? [];
-  const canManageProvider = auth.member.role === "ORG_OWNER" || auth.member.role === "IT_ADMIN";
-  const canViewProvider = ["PERSONAL_OWNER", "ORG_OWNER", "IT_ADMIN", "OPS_ADMIN", "VIEWER"].includes(auth.member.role);
+  const dailyCards = dailyForecastCards(forecast);
+  const todayHours = todayHourlyForecast(forecast);
+  const isOrganisationWorkspace = auth.workspace.type === "ORGANISATION";
+  const canManageProvider = isOrganisationWorkspace && (auth.member.role === "ORG_OWNER" || auth.member.role === "IT_ADMIN");
+  const canViewProvider = isOrganisationWorkspace && ["ORG_OWNER", "IT_ADMIN", "OPS_ADMIN", "VIEWER"].includes(auth.member.role);
+  const canUseWeatherAiServices = ["PERSONAL_OWNER", "ORG_OWNER", "IT_ADMIN", "OPS_ADMIN", "TEAM_MEMBER", "VIEWER"].includes(auth.member.role);
   const canViewMembers = ["ORG_OWNER", "IT_ADMIN", "OPS_ADMIN"].includes(auth.member.role);
   const canViewAudit = ["ORG_OWNER", "IT_ADMIN", "OPS_ADMIN"].includes(auth.member.role);
+  const weatherAiPlan = weatherAiCapabilities?.capabilities;
+  const servicesBusy = Boolean(busyAction?.startsWith("weatherai:"));
 
   const navItems: Array<{ id: View; label: string; icon: React.ReactNode }> = [
     { id: "overview", label: "Overview", icon: <BarChart3 size={18} /> },
+    { id: "forecast", label: "Forecast", icon: <CloudSun size={18} /> },
     { id: "sites", label: "Sites", icon: <MapPin size={18} /> },
     { id: "rules", label: "Rules", icon: <SlidersHorizontal size={18} /> },
     { id: "incidents", label: "Incidents", icon: <AlertTriangle size={18} /> },
+    ...(canUseWeatherAiServices ? [{ id: "services" as const, label: "Services", icon: <Activity size={18} /> }] : []),
     ...(canViewProvider ? [{ id: "provider" as const, label: "Provider", icon: <KeyRound size={18} /> }] : []),
     ...(canViewMembers ? [{ id: "members" as const, label: "Members", icon: <Users size={18} /> }] : []),
     ...(canViewAudit ? [{ id: "audit" as const, label: "Audit", icon: <Shield size={18} /> }] : [])
@@ -764,6 +989,9 @@ export function App() {
               <div className="mt-1 flex flex-wrap gap-2 text-sm text-slate-500">
                 <RiskBadge value={auth.workspace.type} />
                 {provider?.connection?.capabilityTier ? <RiskBadge value={provider.connection.capabilityTier} /> : null}
+                {!provider?.connection?.capabilityTier && weatherAiCapabilities?.capabilities.plan ? (
+                  <RiskBadge value={weatherAiCapabilities.capabilities.plan} />
+                ) : null}
                 {selectedSite ? <span>{selectedSite.name}</span> : null}
               </div>
             </div>
@@ -870,6 +1098,98 @@ export function App() {
                   </div>
                 )}
               </Panel>
+            </div>
+          ) : null}
+
+          {view === "forecast" ? (
+            <div className="space-y-5">
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <h2 className="text-xl font-bold text-ink">Weather Forecast</h2>
+                  <div className="mt-1 text-sm text-slate-500">
+                    {forecast?.site.name ?? selectedSite?.name ?? "Select a site"} · {forecast?.servedFromCache ? "Cached WeatherAI data" : "Live WeatherAI data"}
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <SelectInput value={selectedSiteId} onChange={(event) => setSelectedSiteId(event.target.value)}>
+                    {sites.map((site) => (
+                      <option key={site.id} value={site.id}>
+                        {site.name}
+                      </option>
+                    ))}
+                  </SelectInput>
+                  <Button disabled={!selectedSiteId || busyAction === "forecast"} icon={<RefreshCw size={17} />} onClick={() => void loadForecast()}>
+                    Refresh Forecast
+                  </Button>
+                </div>
+              </div>
+
+              {forecast ? (
+                <>
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
+                    {dailyCards.map((day) => (
+                      <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm" key={day.key}>
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <div className="text-sm font-bold text-ink">{day.label}</div>
+                            <div className="text-xs text-slate-500">{day.date}</div>
+                          </div>
+                          <div className="rounded-md bg-blue-50 p-2 text-ocean">
+                            <CloudSun size={18} />
+                          </div>
+                        </div>
+                        <div className="mt-4 text-3xl font-bold text-ink">{day.maxTemp}°</div>
+                        <div className="mt-1 text-sm font-semibold text-slate-500">Low {day.minTemp}° · {conditionLabel(day.condition)}</div>
+                        <div className="mt-4 grid grid-cols-2 gap-2 text-xs font-semibold">
+                          <div className="rounded-md bg-slate-50 p-2">
+                            <div className="text-slate-500">Rain</div>
+                            <div className={day.maxRain >= 60 ? "text-danger" : "text-ocean"}>{day.maxRain}%</div>
+                          </div>
+                          <div className="rounded-md bg-slate-50 p-2">
+                            <div className="text-slate-500">Wind</div>
+                            <div className={day.maxWind >= 35 ? "text-danger" : "text-ink"}>{day.maxWind} kph</div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="rounded-lg border border-slate-200 bg-white p-4">
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <h3 className="text-base font-bold text-ink">Today Hourly</h3>
+                        <div className="text-sm text-slate-500">{forecast.site.timezone}</div>
+                      </div>
+                      <RiskBadge value={`${todayHours.length} HOURS`} />
+                    </div>
+                    <div className="flex gap-3 overflow-x-auto pb-2">
+                      {todayHours.map((hour) => (
+                        <div className="min-w-[132px] rounded-md border border-slate-100 bg-slate-50 p-3" key={hour.timestamp}>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-sm font-bold text-ink">{formatHour(hour.timestamp, forecast.site.timezone)}</span>
+                            <CloudSun className="text-ocean" size={17} />
+                          </div>
+                          <div className="mt-3 text-2xl font-bold text-ink">{Math.round(hour.temperatureC)}°</div>
+                          <div className="mt-1 truncate text-xs font-semibold text-slate-500">{conditionLabel(hour.condition)}</div>
+                          <div className="mt-3 grid gap-1 text-xs font-semibold text-slate-600">
+                            <span>Rain {Math.round(hour.precipitationProbability)}%</span>
+                            <span>Wind {Math.round(hour.windSpeedKph)} kph</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="flex min-h-[360px] flex-col items-center justify-center rounded-lg border border-slate-200 bg-white p-6 text-center">
+                  <CloudSun className="text-ocean" size={46} />
+                  <div className="mt-3 text-lg font-bold text-ink">Load the next 7 days</div>
+                  <div className="mt-1 max-w-md text-sm text-slate-500">Choose a monitored site and fetch a WeatherAI forecast rendered as daily and hourly cards.</div>
+                  <Button className="mt-4" disabled={!selectedSiteId || busyAction === "forecast"} icon={<RefreshCw size={17} />} onClick={() => void loadForecast()} variant="primary">
+                    Load Forecast
+                  </Button>
+                </div>
+              )}
             </div>
           ) : null}
 
@@ -1174,7 +1494,280 @@ export function App() {
             </Panel>
           ) : null}
 
-          {view === "provider" ? (
+          {view === "services" ? (
+            <div className="space-y-5">
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                <Stat label="WeatherAI plan" value={weatherAiPlan?.plan ?? "UNKNOWN"} icon={<CloudSun size={20} />} />
+                <Stat label="Forecast days" value={weatherAiPlan?.forecastDays ?? 0} icon={<BarChart3 size={20} />} />
+                <Stat label="Webhooks" value={weatherAiPlan?.webhookLimit ?? 0} icon={<Activity size={20} />} />
+                <Stat label="Tree analyses" value={weatherAiPlan?.treeAnalysisLimit ?? "Unlimited"} icon={<MapPin size={20} />} />
+              </div>
+
+              <div className="grid gap-5 xl:grid-cols-[minmax(0,0.8fr)_minmax(360px,1.2fr)]">
+                <Panel title="Geo & Account">
+                  <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+                    <Field label="IP lookup">
+                      <TextInput value={weatherAiIp} onChange={(event) => setWeatherAiIp(event.target.value)} />
+                    </Field>
+                    <Button
+                      className="self-end"
+                      disabled={servicesBusy || !isWeatherAiServiceEnabled("ipLookup")}
+                      icon={<Search size={17} />}
+                      onClick={() => void runWeatherAiAction("IP Lookup", () => api.weatherAiIpLookup(weatherAiIp || "auto"))}
+                    >
+                      Lookup
+                    </Button>
+                  </div>
+                  <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                    <Button
+                      disabled={servicesBusy || !isWeatherAiServiceEnabled("weatherGeo")}
+                      icon={<MapPin size={17} />}
+                      onClick={() =>
+                        void runWeatherAiAction("Weather Geo", () =>
+                          api.weatherAiWeatherGeo({ siteId: selectedSiteId || undefined, ip: selectedSiteId ? undefined : "auto", days: 1, ai: false })
+                        )
+                      }
+                    >
+                      Weather Geo
+                    </Button>
+                    <Button
+                      disabled={servicesBusy}
+                      icon={<RefreshCw size={17} />}
+                      onClick={() => void runWeatherAiAction("Capabilities", () => api.weatherAiCapabilities())}
+                    >
+                      Refresh Capabilities
+                    </Button>
+                    <Button disabled={servicesBusy} icon={<BarChart3 size={17} />} onClick={() => void runWeatherAiAction("Usage Summary", () => api.usageSummary())}>
+                      Usage Summary
+                    </Button>
+                  </div>
+                </Panel>
+
+                <Panel title="Latest Service Result">
+                  {weatherAiOutput && isPlainRecord(weatherAiOutput) ? (
+                    <div className="space-y-3">
+                      <div>
+                        <div className="text-sm font-bold text-ink">{String(weatherAiOutput.label ?? "WeatherAI result")}</div>
+                        <div className="text-xs text-slate-500">{formatDateTime(String(weatherAiOutput.ranAt ?? new Date().toISOString()))}</div>
+                      </div>
+                      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                        {serviceResultHighlights(weatherAiOutput.result).map((item) => (
+                          <div className="rounded-md border border-slate-200 bg-slate-50 p-3" key={`${item.label}-${item.value}`}>
+                            <div className="text-xs font-semibold uppercase text-slate-500">{item.label}</div>
+                            <div className="mt-1 break-words text-sm font-bold text-ink">{item.value}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex min-h-[140px] items-center justify-center rounded-md border border-dashed border-slate-200 text-sm font-semibold text-slate-500">
+                      Run a service action to see a summarized result.
+                    </div>
+                  )}
+                </Panel>
+              </div>
+
+              <div className="grid gap-5 xl:grid-cols-3">
+                <Panel title="Trees / Forestry">
+                  <div className="space-y-3">
+                    <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
+                      <Button
+                        disabled={servicesBusy || !isWeatherAiServiceEnabled("trees")}
+                        icon={<RefreshCw size={17} />}
+                        onClick={() => void runWeatherAiAction("Tree Quota", () => api.weatherAiTreeQuota())}
+                      >
+                        Tree Quota
+                      </Button>
+                      <Button
+                        disabled={servicesBusy || !isWeatherAiServiceEnabled("trees")}
+                        icon={<BarChart3 size={17} />}
+                        onClick={() => void runWeatherAiAction("Tree History", () => api.weatherAiTreeHistory())}
+                      >
+                        Tree History
+                      </Button>
+                    </div>
+                    <Field label="Image">
+                      <input
+                        accept="image/jpeg,image/png,image/webp"
+                        className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm"
+                        onChange={(event) => setWeatherAiTreeFile(event.target.files?.[0] ?? null)}
+                        type="file"
+                      />
+                    </Field>
+                    <Field label="County / region">
+                      <TextInput value={weatherAiTreeCounty} onChange={(event) => setWeatherAiTreeCounty(event.target.value)} />
+                    </Field>
+                    <Field label="Land acres">
+                      <TextInput type="number" value={weatherAiTreeLandAcres} onChange={(event) => setWeatherAiTreeLandAcres(event.target.value)} />
+                    </Field>
+                    <Button
+                      className="w-full"
+                      disabled={!weatherAiTreeFile || servicesBusy || !isWeatherAiServiceEnabled("trees")}
+                      icon={<Play size={17} />}
+                      onClick={() => {
+                        if (!weatherAiTreeFile) {
+                          return;
+                        }
+                        const formData = new FormData();
+                        formData.set("image", weatherAiTreeFile);
+                        formData.set("farmerId", auth.user.id);
+                        if (weatherAiTreeCounty.trim()) {
+                          formData.set("county", weatherAiTreeCounty.trim());
+                        }
+                        if (weatherAiTreeLandAcres.trim()) {
+                          formData.set("landAcres", weatherAiTreeLandAcres.trim());
+                        }
+                        void runWeatherAiAction("Tree Analysis", () => api.weatherAiTreeAnalyze(formData));
+                      }}
+                      variant="primary"
+                    >
+                      Analyze Trees
+                    </Button>
+                  </div>
+                </Panel>
+
+                <Panel title="Webhooks">
+                  <div className="space-y-3">
+                    <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
+                      <Button
+                        disabled={servicesBusy || !isWeatherAiServiceEnabled("webhooks")}
+                        icon={<RefreshCw size={17} />}
+                        onClick={() => void runWeatherAiAction("List Webhooks", () => api.weatherAiWebhooks())}
+                      >
+                        List Webhooks
+                      </Button>
+                      <Button
+                        disabled={!weatherAiWebhookDeleteId.trim() || servicesBusy || !isWeatherAiServiceEnabled("webhooks")}
+                        icon={<AlertTriangle size={17} />}
+                        onClick={() => void runWeatherAiAction("Delete Webhook", () => api.weatherAiDeleteWebhook(weatherAiWebhookDeleteId.trim()))}
+                      >
+                        Delete
+                      </Button>
+                    </div>
+                    <Field label="Callback URL">
+                      <TextInput value={weatherAiWebhookUrl} onChange={(event) => setWeatherAiWebhookUrl(event.target.value)} />
+                    </Field>
+                    <Field label="Trigger">
+                      <SelectInput value={weatherAiWebhookTrigger} onChange={(event) => setWeatherAiWebhookTrigger(event.target.value)}>
+                        <option value="rain">Rain</option>
+                        <option value="extreme_wind">Extreme wind</option>
+                        <option value="frost">Frost</option>
+                        <option value="drought">Drought</option>
+                      </SelectInput>
+                    </Field>
+                    <Field label="Webhook ID">
+                      <TextInput value={weatherAiWebhookDeleteId} onChange={(event) => setWeatherAiWebhookDeleteId(event.target.value)} />
+                    </Field>
+                    <Button
+                      className="w-full"
+                      disabled={!weatherAiWebhookUrl || !selectedSiteId || servicesBusy || !isWeatherAiServiceEnabled("webhooks")}
+                      icon={<CheckCircle2 size={17} />}
+                      onClick={() =>
+                        void runWeatherAiAction("Create Webhook", () =>
+                          api.weatherAiCreateWebhook({
+                            url: weatherAiWebhookUrl,
+                            siteId: selectedSiteId,
+                            triggers: [weatherAiWebhookTrigger],
+                            timezone: selectedSite?.timezone
+                          })
+                        )
+                      }
+                      variant="primary"
+                    >
+                      Create Webhook
+                    </Button>
+                    {weatherAiServiceReason("webhooks") ? (
+                      <div className="rounded-md bg-slate-100 p-2 text-xs font-semibold text-slate-600">{weatherAiServiceReason("webhooks")}</div>
+                    ) : null}
+                  </div>
+                </Panel>
+
+                <Panel title="SMS / USSD">
+                  <div className="space-y-3">
+                    <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
+                      <Button
+                        disabled={servicesBusy || !isWeatherAiServiceEnabled("sms")}
+                        icon={<Activity size={17} />}
+                        onClick={() => void runWeatherAiAction("SMS Health", () => api.weatherAiSmsHealth())}
+                      >
+                        SMS Health
+                      </Button>
+                      <Button
+                        disabled={servicesBusy || !isWeatherAiServiceEnabled("sms")}
+                        icon={<BarChart3 size={17} />}
+                        onClick={() => void runWeatherAiAction("SMS Stats", () => api.weatherAiSmsStats())}
+                      >
+                        SMS Stats
+                      </Button>
+                    </div>
+                    <Field label="Phone">
+                      <TextInput value={weatherAiSmsTo} onChange={(event) => setWeatherAiSmsTo(event.target.value)} />
+                    </Field>
+                    <Field label="Message">
+                      <TextInput value={weatherAiSmsMessage} onChange={(event) => setWeatherAiSmsMessage(event.target.value)} />
+                    </Field>
+                    <Field label="Alert type">
+                      <SelectInput value={weatherAiSmsAlertType} onChange={(event) => setWeatherAiSmsAlertType(event.target.value)}>
+                        <option value="rain">Rain</option>
+                        <option value="frost">Frost</option>
+                        <option value="extreme_wind">Extreme wind</option>
+                        <option value="drought">Drought</option>
+                      </SelectInput>
+                    </Field>
+                    <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
+                      <Button
+                        disabled={!weatherAiSmsTo || !weatherAiSmsMessage || servicesBusy || !isWeatherAiServiceEnabled("sms")}
+                        icon={<CheckCircle2 size={17} />}
+                        onClick={() =>
+                          void runWeatherAiAction("Send SMS", () =>
+                            api.weatherAiSmsSend({ to: weatherAiSmsTo, message: weatherAiSmsMessage, type: "weather_alert" })
+                          )
+                        }
+                      >
+                        Send SMS
+                      </Button>
+                      <Button
+                        disabled={!weatherAiSmsTo || servicesBusy || !isWeatherAiServiceEnabled("sms")}
+                        icon={<AlertTriangle size={17} />}
+                        onClick={() =>
+                          void runWeatherAiAction("Send SMS Alert", () =>
+                            api.weatherAiSmsAlert({
+                              to: weatherAiSmsTo,
+                              alertType: weatherAiSmsAlertType,
+                              data: { site: selectedSite?.name, message: weatherAiSmsMessage }
+                            })
+                          )
+                        }
+                      >
+                        Send Alert
+                      </Button>
+                      <Button
+                        disabled={!weatherAiSmsTo || servicesBusy || !isWeatherAiServiceEnabled("sms")}
+                        icon={<UserPlus size={17} />}
+                        onClick={() =>
+                          void runWeatherAiAction("Bomet Register", () =>
+                            api.weatherAiBometRegister({
+                              phone: weatherAiSmsTo,
+                              name: auth.user.fullName,
+                              location: selectedSite?.name,
+                              cropType: "maize"
+                            })
+                          )
+                        }
+                      >
+                        Bomet Register
+                      </Button>
+                    </div>
+                    {weatherAiServiceReason("sms") ? (
+                      <div className="rounded-md bg-slate-100 p-2 text-xs font-semibold text-slate-600">{weatherAiServiceReason("sms")}</div>
+                    ) : null}
+                  </div>
+                </Panel>
+              </div>
+            </div>
+          ) : null}
+
+          {view === "provider" && canViewProvider ? (
             <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
               <Panel title="Provider Centre">
                 <div className="grid gap-5 md:grid-cols-2">
