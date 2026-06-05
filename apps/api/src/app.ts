@@ -38,9 +38,26 @@ export function createApp() {
   const app = express();
 
   app.use(helmet());
+  const allowedOrigins = env.CORS_ORIGIN.split(",").map((origin) => origin.trim());
   app.use(
     cors({
-      origin: env.CORS_ORIGIN.split(",").map((origin) => origin.trim()),
+      origin: (origin, callback) => {
+        if (!origin) {
+          return callback(null, true);
+        }
+        if (allowedOrigins.includes(origin)) {
+          return callback(null, true);
+        }
+        // Allow dynamic Vercel preview/deployment URLs for this project
+        if (/^https:\/\/fieldcast-ops-weather-intelligence-.*\.vercel\.app$/.test(origin)) {
+          return callback(null, true);
+        }
+        // Allow localhost origins in development
+        if (!isProduction && /^http:\/\/localhost(:\d+)?$/.test(origin)) {
+          return callback(null, true);
+        }
+        callback(null, false);
+      },
       credentials: true
     })
   );
