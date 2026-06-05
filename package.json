@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "concurrently \"npm run dev --workspace apps/api\" \"npm run dev --workspace apps/web\"",
     "build": "npm run build:web",
+    "vercel-build": "npm run build:web",
     "build:all": "npm run build:api && npm run build:web",
     "build:api": "npm run build --workspace apps/api",
     "build:web": "npm run build --workspace apps/web",
