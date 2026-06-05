@@ -376,7 +376,7 @@ Recommended Vercel import settings:
 - Framework Preset: `Vite`
 - Root Directory: repository root, not `apps/web`
 - Install Command: `npm ci`
-- Build Command: `npm run build --workspace apps/web`
+- Build Command: `npm run build:web`
 - Output Directory: `apps/web/dist`
 
 Set this Vercel environment variable for Production and Preview:

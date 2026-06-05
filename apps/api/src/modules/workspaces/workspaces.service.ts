@@ -1,6 +1,5 @@
 import bcrypt from "bcryptjs";
 import { z } from "zod";
-import type { MemberRole } from "@prisma/client";
 import { env } from "../../config/env.js";
 import { invitationEmail, sendEmail } from "../../infrastructure/email/resend.js";
 import { prisma } from "../../infrastructure/prisma/client.js";
@@ -9,6 +8,7 @@ import { createId, hashToken } from "../../utils/id.js";
 import { createAuditLog, publicMember, publicMembers } from "../db/helpers.js";
 
 export const memberRoleSchema = z.enum(["ORG_OWNER", "IT_ADMIN", "OPS_ADMIN", "TEAM_MEMBER", "VIEWER"]);
+type MemberRoleInput = z.infer<typeof memberRoleSchema>;
 
 function assertWorkspaceAccess(authWorkspaceId: string, requestedWorkspaceId: string) {
   if (authWorkspaceId !== requestedWorkspaceId) {
@@ -128,7 +128,7 @@ export async function inviteMember(
   authWorkspaceId: string,
   actorMemberId: string,
   workspaceId: string,
-  input: { email: string; role: MemberRole }
+  input: { email: string; role: MemberRoleInput }
 ) {
   assertWorkspaceAccess(authWorkspaceId, workspaceId);
   const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId } });

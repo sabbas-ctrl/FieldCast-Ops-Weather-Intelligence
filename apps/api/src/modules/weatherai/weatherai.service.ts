@@ -5,7 +5,27 @@ import { prisma } from "../../infrastructure/prisma/client.js";
 import { createUsageEvent } from "../db/helpers.js";
 import { fetchProviderUsage, resolveCapabilities } from "../provider/weatherai.adapter.js";
 import { HttpError } from "../../utils/http.js";
-import type { CapabilityTier, Site, Workspace, WorkspaceMember } from "@prisma/client";
+
+type CapabilityTier = "FREE" | "PRO" | "SCALE" | "UNKNOWN";
+type WeatherAiWorkspace = {
+  id: string;
+  name: string;
+  type: "PERSONAL" | "ORGANISATION";
+  providerMode: "PLATFORM_MANAGED" | "ORGANISATION_CONNECTED";
+  timezone: string;
+};
+type WeatherAiMember = {
+  id: string;
+  workspaceId: string;
+  weatherUsageEnabled: boolean;
+  workspace: WeatherAiWorkspace;
+};
+type WeatherSite = {
+  id: string;
+  latitude: number;
+  longitude: number;
+  timezone: string;
+};
 
 type ServiceKey =
   | "weather"
@@ -19,8 +39,8 @@ type ServiceKey =
 
 type WeatherAiAccess = {
   apiKey: string;
-  workspace: Workspace;
-  member: WorkspaceMember;
+  workspace: WeatherAiWorkspace;
+  member: WeatherAiMember;
   capabilityTier: CapabilityTier;
   requestLimit: number;
   aiRequestLimit: number;
@@ -37,6 +57,10 @@ const planRank: Record<CapabilityTier, number> = {
   PRO: 2,
   SCALE: 3
 };
+
+function planScore(plan: CapabilityTier) {
+  return planRank[plan] ?? 0;
+}
 
 const serviceCatalog: Record<
   ServiceKey,
@@ -125,7 +149,7 @@ function entitlementFor(access: Pick<WeatherAiAccess, "capabilityTier" | "foreca
 function serviceAvailability(access: WeatherAiAccess) {
   const entitlement = entitlementFor(access);
   return Object.entries(serviceCatalog).map(([key, service]) => {
-    const planAllowed = planRank[access.capabilityTier] >= planRank[service.minimumPlan];
+    const planAllowed = planScore(access.capabilityTier) >= planScore(service.minimumPlan);
     const smsAllowed = !service.requiresSmsApproval || (access.smsEligible && access.smsApproved);
     return {
       key,
@@ -210,7 +234,10 @@ async function resolveWeatherAiAccess(workspaceId: string, memberId: string): Pr
 
 function assertService(access: WeatherAiAccess, service: ServiceKey) {
   const serviceMeta = serviceCatalog[service];
-  if (planRank[access.capabilityTier] < planRank[serviceMeta.minimumPlan]) {
+  if (!serviceMeta) {
+    throw new HttpError(404, "WeatherAI service is not available");
+  }
+  if (planScore(access.capabilityTier) < planScore(serviceMeta.minimumPlan)) {
     throw new HttpError(403, `${serviceMeta.label} requires the ${serviceMeta.minimumPlan} plan.`);
   }
 
@@ -231,7 +258,7 @@ async function getSiteForWeather(workspaceId: string, siteId: string | undefined
   return site;
 }
 
-function setCoordinateParams(url: URL, site: Site | null, lat: number | undefined, lon: number | undefined) {
+function setCoordinateParams(url: URL, site: WeatherSite | null, lat: number | undefined, lon: number | undefined) {
   const latitude = site?.latitude ?? lat;
   const longitude = site?.longitude ?? lon;
   if (typeof latitude !== "number" || typeof longitude !== "number") {
