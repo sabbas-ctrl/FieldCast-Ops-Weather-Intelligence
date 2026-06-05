@@ -54,6 +54,8 @@ jobs:
       - name: Validate Docker Hub credentials
         shell: bash
         run: |
+          set -euo pipefail
+
           if [ -z "${DOCKERHUB_USERNAME}" ]; then
             echo "::error::Set DOCKERHUB_USERNAME as a GitHub repository/environment variable or secret."
             exit 1
@@ -66,8 +68,32 @@ jobs:
             echo "::error::DOCKERHUB_USERNAME must be your Docker Hub username, not your email address."
             exit 1
           fi
-          if [[ "${DOCKERHUB_TOKEN}" == Bearer* || "${DOCKERHUB_TOKEN}" == *" "* ]]; then
-            echo "::error::DOCKERHUB_TOKEN must be the raw Docker Hub access token only. Do not include 'Bearer' or spaces."
+          if printf '%s' "${DOCKERHUB_USERNAME}" | grep -q '[[:space:]]'; then
+            echo "::error::DOCKERHUB_USERNAME contains whitespace. Re-save the variable with only the Docker Hub username."
+            exit 1
+          fi
+          if printf '%s' "${DOCKERHUB_TOKEN}" | grep -q '[[:space:]]'; then
+            echo "::error::DOCKERHUB_TOKEN contains whitespace or a newline. Re-create/re-save the secret with only the raw token."
+            exit 1
+          fi
+          if [[ ! "${DOCKERHUB_USERNAME}" =~ ^[a-z0-9][a-z0-9_-]{2,29}$ ]]; then
+            echo "::error::DOCKERHUB_USERNAME must be the Docker Hub username/id, for example sabbas-ctrl, not a display name or email."
+            exit 1
+          fi
+          if [[ "${DOCKERHUB_TOKEN}" == Bearer* || "${DOCKERHUB_TOKEN}" == Basic* || "${DOCKERHUB_TOKEN}" == Token* ]]; then
+            echo "::error::DOCKERHUB_TOKEN must be the raw Docker Hub access token only. Do not include auth prefixes."
+            exit 1
+          fi
+
+          response="$(curl -fsS -X POST https://hub.docker.com/v2/users/login/ \
+            -H 'Content-Type: application/json' \
+            -d "$(jq -cn --arg username "${DOCKERHUB_USERNAME}" --arg password "${DOCKERHUB_TOKEN}" '{username:$username,password:$password}')" \
+            || true)"
+
+          dockerhub_login_token="$(printf '%s' "${response}" | jq -r '.token // empty' 2>/dev/null || true)"
+
+          if [ -z "${dockerhub_login_token}" ]; then
+            echo "::error::Docker Hub rejected DOCKERHUB_USERNAME/DOCKERHUB_TOKEN. Use a Docker Hub access token with read/write permission."
             exit 1
           fi
 
