@@ -26,6 +26,8 @@ router.post(
         email: z.string().email(),
         password: passwordSchema,
         preferredUnits: z.enum(["METRIC", "IMPERIAL"]).default("METRIC"),
+        country: z.string().min(2).optional(),
+        timezone: z.string().min(2).optional(),
         defaultLocation: z
           .object({
             name: z.string().min(2),
@@ -85,14 +87,14 @@ router.post(
 router.post(
   "/refresh",
   asyncHandler(async (request, response) => {
-    response.json(refresh(request.cookies[refreshCookieName]));
+    response.json(await refresh(request.cookies[refreshCookieName]));
   })
 );
 
 router.post(
   "/logout",
   asyncHandler(async (request, response) => {
-    logout(request.cookies[refreshCookieName]);
+    await logout(request.cookies[refreshCookieName]);
     response.clearCookie(refreshCookieName, refreshCookieOptions);
     response.status(204).send();
   })
@@ -103,7 +105,7 @@ router.get(
   requireAuth,
   asyncHandler(async (request, response) => {
     const auth = request.auth!;
-    response.json(me(auth.userId, auth.memberId));
+    response.json(await me(auth.userId, auth.memberId));
   })
 );
 

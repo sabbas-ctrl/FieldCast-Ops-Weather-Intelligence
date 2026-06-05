@@ -9,9 +9,10 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate dev",
-    "prisma:studio": "prisma studio"
+    "prisma:generate": "cd ../.. && prisma generate --schema apps/api/prisma/schema.prisma",
+    "prisma:migrate": "cd ../.. && prisma migrate dev --schema apps/api/prisma/schema.prisma",
+    "prisma:studio": "cd ../.. && prisma studio --schema apps/api/prisma/schema.prisma",
+    "db:seed": "cd ../.. && tsx apps/api/src/modules/db/seed.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.0.1",

@@ -19,7 +19,7 @@ router.use(requireAuth);
 router.get(
   "/current",
   asyncHandler(async (request, response) => {
-    response.json(currentWorkspace(request.auth!.workspaceId));
+    response.json(await currentWorkspace(request.auth!.workspaceId));
   })
 );
 
@@ -27,7 +27,7 @@ router.get(
   "/:workspaceId/members",
   requirePermission("members.view"),
   asyncHandler(async (request, response) => {
-    response.json(listMembers(request.auth!.workspaceId, routeParam(request.params.workspaceId, "workspaceId")));
+    response.json(await listMembers(request.auth!.workspaceId, routeParam(request.params.workspaceId, "workspaceId")));
   })
 );
 
@@ -41,7 +41,7 @@ router.post(
         role: memberRoleSchema
       })
       .parse(request.body);
-    response.status(201).json(inviteMember(request.auth!.workspaceId, request.auth!.memberId, routeParam(request.params.workspaceId, "workspaceId"), body));
+    response.status(201).json(await inviteMember(request.auth!.workspaceId, request.auth!.memberId, routeParam(request.params.workspaceId, "workspaceId"), body));
   })
 );
 
@@ -51,7 +51,7 @@ router.patch(
   asyncHandler(async (request, response) => {
     const body = z.object({ enabled: z.boolean() }).parse(request.body);
     response.json(
-      setWeatherUsageAccess(
+      await setWeatherUsageAccess(
         request.auth!.workspaceId,
         request.auth!.memberId,
         routeParam(request.params.workspaceId, "workspaceId"),
@@ -67,7 +67,7 @@ router.patch(
   requirePermission("members.revoke"),
   asyncHandler(async (request, response) => {
     response.json(
-      suspendMember(
+      await suspendMember(
         request.auth!.workspaceId,
         request.auth!.memberId,
         routeParam(request.params.workspaceId, "workspaceId"),

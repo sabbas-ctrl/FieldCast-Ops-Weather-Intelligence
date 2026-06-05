@@ -13,7 +13,7 @@ FieldCast Ops is a multi-tenant weather operations platform. It treats WeatherAI
 - Redis-compatible cache abstraction with an in-memory fallback for local/demo runs.
 - Docker Compose for API, PostgreSQL, and Redis.
 
-The current API uses a seeded in-memory store so the product can run immediately without waiting for real WeatherAI sample payloads. The Prisma schema in `apps/api/prisma/schema.prisma` is the production database target.
+The API is backed by Prisma/PostgreSQL. On startup, it seeds the demo login and demonstration sites only when the database has no users.
 
 ## Demo Login
 
@@ -21,6 +21,10 @@ The current API uses a seeded in-memory store so the product can run immediately
 Email: demo@fieldcast.local
 Password: FieldCast123!
 ```
+
+Login is universal: the same sign-in form is used for personal users and organisation members. The backend resolves the active workspace membership at login, stores `userId`, `memberId`, `workspaceId`, and `role` in the short-lived JWT, and re-checks the member role/status from PostgreSQL on every authenticated request.
+
+Personal workspaces use the platform-managed WeatherAI mode and do not require the user to enter a provider key. Organisation workspaces require an active WeatherAI provider connection before weather analysis endpoints run. If the key is missing, Owners and IT Admins are told to connect it in Provider Centre; other members are told to contact IT.
 
 Demo WeatherAI keys:
 
@@ -49,12 +53,13 @@ Copy `.env.example` to `.env` and replace secrets before deployment.
 
 Important variables:
 
-- `DATABASE_URL`: PostgreSQL connection string.
+- `DATABASE_URL`: PostgreSQL connection string. For local pgAdmin with the `postgres` owner, use `postgresql://postgres:<your-password>@localhost:5432/fieldcast_ops?schema=public`.
 - `REDIS_URL`: Redis or Upstash Redis URL.
 - `JWT_ACCESS_SECRET` and `JWT_REFRESH_SECRET`: long random strings.
 - `ENCRYPTION_KEY`: 32-byte base64 key for provider API key encryption.
 - `WEATHERAI_BASE_URL`: real WeatherAI API base URL.
 - `WEATHERAI_PLATFORM_API_KEY`: platform-managed key for individual demo workspaces.
+- `NOMINATIM_USER_AGENT`: identifying User-Agent for the OpenStreetMap Nominatim location-search proxy.
 - `CORS_ORIGIN`: deployed frontend origin.
 
 Generate a suitable encryption key with:
@@ -109,7 +114,41 @@ Backend:
 - Run with `docker compose up -d api`.
 - Set `CORS_ORIGIN` to the Vercel URL.
 
+## PostgreSQL Setup
+
+Create the database manually in pgAdmin or Query Tool while connected to the default `postgres` database:
+
+```sql
+CREATE DATABASE fieldcast_ops OWNER postgres;
+```
+
+Then set `.env` to match your local `postgres` password:
+
+```env
+DATABASE_URL=postgresql://postgres:<your-password>@localhost:5432/fieldcast_ops?schema=public
+```
+
+Run the first migration:
+
+```bash
+npm.cmd run prisma:migrate --workspace apps/api -- --name init
+```
+
+The API seeds the demo login/sites automatically on startup if the database has no users. You can also seed manually:
+
+```bash
+npm.cmd run db:seed
+```
+
 ## WeatherAI Integration Note
+
+## Country, Timezone, And Location Data
+
+- Countries come from the `i18n-iso-countries` package, not a handwritten list.
+- Timezones come from the runtime `Intl.supportedValuesOf("timeZone")` IANA timezone data and are displayed with current UTC offset labels.
+- Global location search is proxied through OpenStreetMap Nominatim at `/api/locations/search`.
+
+The public Nominatim service is rate-limited and requires an identifying User-Agent and suitable attribution. For production-heavy usage, use a paid geocoding provider or self-host Nominatim.
 
 The WeatherAI adapter is intentionally defensive. The brief says `/v1/usage` returns plan limits, but the exact response structure is not guaranteed. Capability resolution is based on returned limits and guarded entitlements, not a hardcoded `plan` field.
 

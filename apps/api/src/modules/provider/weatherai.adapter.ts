@@ -1,6 +1,6 @@
 import { env } from "../../config/env.js";
 import { cache } from "../../infrastructure/cache/cache.js";
-import type { CapabilityTier } from "../demo/store.js";
+import type { CapabilityTier } from "@prisma/client";
 
 export type ProviderUsage = {
   requestsUsed: number;

@@ -19,7 +19,7 @@ router.get(
   "/status",
   requirePermission("provider.view_usage"),
   asyncHandler(async (request, response) => {
-    response.json(getProviderStatus(request.auth!.workspaceId));
+    response.json(await getProviderStatus(request.auth!.workspaceId));
   })
 );
 
@@ -27,7 +27,7 @@ router.get(
   "/usage",
   requirePermission("provider.view_usage"),
   asyncHandler(async (request, response) => {
-    response.json(getProviderStatus(request.auth!.workspaceId).usage);
+    response.json((await getProviderStatus(request.auth!.workspaceId)).usage);
   })
 );
 
@@ -61,7 +61,7 @@ router.delete(
   "/disconnect",
   requirePermission("provider.disconnect"),
   asyncHandler(async (request, response) => {
-    response.json(disconnectProvider(request.auth!.workspaceId, request.auth!.memberId));
+    response.json(await disconnectProvider(request.auth!.workspaceId, request.auth!.memberId));
   })
 );
 

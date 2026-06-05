@@ -1,20 +1,27 @@
-import { store } from "../demo/store.js";
+import { prisma } from "../../infrastructure/prisma/client.js";
 
-export function listUsageEvents(workspaceId: string) {
-  return store.usageEvents
-    .filter((event) => event.workspaceId === workspaceId)
-    .slice(0, 100)
-    .map((event) => ({
-      ...event,
-      member: event.memberId ? store.members.find((member) => member.id === event.memberId) ?? null : null,
-      site: event.siteId ? store.sites.find((site) => site.id === event.siteId) ?? null : null
-    }));
+export async function listUsageEvents(workspaceId: string) {
+  return prisma.usageEvent.findMany({
+    where: { workspaceId },
+    include: {
+      member: { include: { user: { select: { id: true, fullName: true, email: true } } } },
+      site: true
+    },
+    orderBy: { createdAt: "desc" },
+    take: 100
+  });
 }
 
-export function usageSummary(workspaceId: string) {
-  const events = store.usageEvents.filter((event) => event.workspaceId === workspaceId);
+export async function usageSummary(workspaceId: string) {
+  const events = await prisma.usageEvent.findMany({
+    where: { workspaceId },
+    include: {
+      member: { include: { user: { select: { fullName: true } } } }
+    },
+    orderBy: { createdAt: "desc" }
+  });
   const byFeature = new Map<string, { feature: string; count: number; providerCalls: number; cacheHits: number }>();
-  const byMember = new Map<string, { memberId: string; memberName: string; analyses: number; aiSummaries: number; lastActivity?: string }>();
+  const byMember = new Map<string, { memberId: string; memberName: string; analyses: number; aiSummaries: number; lastActivity?: Date }>();
 
   for (const event of events) {
     const feature = byFeature.get(event.feature) ?? {
@@ -29,11 +36,9 @@ export function usageSummary(workspaceId: string) {
     byFeature.set(event.feature, feature);
 
     if (event.memberId) {
-      const member = store.members.find((candidate) => candidate.id === event.memberId);
-      const user = member ? store.users.find((candidate) => candidate.id === member.userId) : undefined;
       const memberSummary = byMember.get(event.memberId) ?? {
         memberId: event.memberId,
-        memberName: user?.fullName ?? "Unknown member",
+        memberName: event.member?.user.fullName ?? "Unknown member",
         analyses: 0,
         aiSummaries: 0
       };

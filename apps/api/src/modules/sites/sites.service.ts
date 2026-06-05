@@ -1,8 +1,8 @@
 import { z } from "zod";
+import { prisma } from "../../infrastructure/prisma/client.js";
 import { HttpError } from "../../utils/http.js";
 import { createId } from "../../utils/id.js";
-import { createAuditLog, createDefaultRulesForSite, store } from "../demo/store.js";
-import type { Site } from "../demo/store.js";
+import { createAuditLog, createDefaultRulesForSite } from "../db/helpers.js";
 
 export const siteInputSchema = z.object({
   name: z.string().min(2),
@@ -26,45 +26,55 @@ export const siteInputSchema = z.object({
   monitoringEnabled: z.boolean().default(false)
 });
 
-export function listSites(workspaceId: string) {
-  return store.sites
-    .filter((site) => site.workspaceId === workspaceId)
-    .map((site) => ({
-      ...site,
-      ruleCount: store.riskRules.filter((rule) => rule.siteId === site.id && rule.enabled).length,
-      openIncidentCount: store.incidents.filter(
-        (incident) => incident.siteId === site.id && ["OPEN", "ACKNOWLEDGED"].includes(incident.status)
-      ).length
-    }));
+export async function listSites(workspaceId: string) {
+  const sites = await prisma.site.findMany({
+    where: { workspaceId },
+    include: {
+      _count: {
+        select: {
+          rules: { where: { enabled: true } },
+          incidents: { where: { status: { in: ["OPEN", "ACKNOWLEDGED"] } } }
+        }
+      }
+    },
+    orderBy: { createdAt: "asc" }
+  });
+
+  return sites.map(({ _count, ...site }) => ({
+    ...site,
+    ruleCount: _count.rules,
+    openIncidentCount: _count.incidents
+  }));
 }
 
-export function getSite(workspaceId: string, siteId: string) {
-  const site = store.sites.find((candidate) => candidate.workspaceId === workspaceId && candidate.id === siteId);
+export async function getSite(workspaceId: string, siteId: string) {
+  const site = await prisma.site.findFirst({ where: { workspaceId, id: siteId } });
   if (!site) {
     throw new HttpError(404, "Site not found");
   }
   return site;
 }
 
-export function createSite(workspaceId: string, actorMemberId: string, input: z.infer<typeof siteInputSchema>) {
-  const site: Site = {
-    id: createId("site"),
-    workspaceId,
-    name: input.name,
-    description: input.description,
-    siteType: input.siteType,
-    country: input.country,
-    latitude: input.latitude,
-    longitude: input.longitude,
-    timezone: input.timezone,
-    units: input.units,
-    monitoringEnabled: input.monitoringEnabled,
-    createdBy: actorMemberId,
-    createdAt: new Date().toISOString()
-  };
-  store.sites.unshift(site);
-  createDefaultRulesForSite(workspaceId, site.id, actorMemberId);
-  createAuditLog({
+export async function createSite(workspaceId: string, actorMemberId: string, input: z.infer<typeof siteInputSchema>) {
+  const site = await prisma.site.create({
+    data: {
+      id: createId("site"),
+      workspaceId,
+      name: input.name,
+      description: input.description,
+      siteType: input.siteType,
+      country: input.country,
+      latitude: input.latitude,
+      longitude: input.longitude,
+      timezone: input.timezone,
+      units: input.units,
+      monitoringEnabled: input.monitoringEnabled,
+      createdBy: actorMemberId
+    }
+  });
+
+  await createDefaultRulesForSite(workspaceId, site.id, actorMemberId);
+  await createAuditLog({
     workspaceId,
     actorMemberId,
     action: "site.created",
@@ -75,15 +85,15 @@ export function createSite(workspaceId: string, actorMemberId: string, input: z.
   return site;
 }
 
-export function updateSite(
+export async function updateSite(
   workspaceId: string,
   actorMemberId: string,
   siteId: string,
   input: Partial<z.infer<typeof siteInputSchema>>
 ) {
-  const site = getSite(workspaceId, siteId);
-  Object.assign(site, input);
-  createAuditLog({
+  await getSite(workspaceId, siteId);
+  const site = await prisma.site.update({ where: { id: siteId }, data: input });
+  await createAuditLog({
     workspaceId,
     actorMemberId,
     action: "site.updated",
@@ -94,12 +104,10 @@ export function updateSite(
   return site;
 }
 
-export function deleteSite(workspaceId: string, actorMemberId: string, siteId: string) {
-  const site = getSite(workspaceId, siteId);
-  store.sites = store.sites.filter((candidate) => candidate.id !== site.id);
-  store.riskRules = store.riskRules.filter((rule) => rule.siteId !== site.id);
-  store.incidents = store.incidents.filter((incident) => incident.siteId !== site.id);
-  createAuditLog({
+export async function deleteSite(workspaceId: string, actorMemberId: string, siteId: string) {
+  const site = await getSite(workspaceId, siteId);
+  await prisma.site.delete({ where: { id: site.id } });
+  await createAuditLog({
     workspaceId,
     actorMemberId,
     action: "site.deleted",

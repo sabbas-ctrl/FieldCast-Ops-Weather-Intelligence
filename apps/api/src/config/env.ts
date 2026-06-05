@@ -1,7 +1,10 @@
 import dotenv from "dotenv";
+import path from "node:path";
 import { z } from "zod";
 
-dotenv.config();
+dotenv.config({ path: path.resolve(process.cwd(), ".env") });
+dotenv.config({ path: path.resolve(process.cwd(), "../.env") });
+dotenv.config({ path: path.resolve(process.cwd(), "../../.env") });
 
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -13,8 +16,13 @@ const envSchema = z.object({
   ENCRYPTION_KEY: z.string().default("dev-only-not-production-safe-key"),
   DATABASE_URL: z.string().optional(),
   REDIS_URL: z.string().optional(),
-  WEATHERAI_BASE_URL: z.string().url().default("https://api.weatherai.example"),
+  WEATHERAI_BASE_URL: z.string().url().default("https://api.weather-ai.co"),
   WEATHERAI_PLATFORM_API_KEY: z.string().optional(),
+  NOMINATIM_BASE_URL: z.string().url().default("https://nominatim.openstreetmap.org"),
+  NOMINATIM_USER_AGENT: z
+    .string()
+    .default("FieldCastOpsWeatherIntelligence/0.1 (development; contact: noreply@visionindex.studio)"),
+  PHOTON_BASE_URL: z.string().url().default("https://photon.komoot.io"),
   RESEND_API_KEY: z.string().optional(),
   RESEND_FROM: z.string().optional()
 });

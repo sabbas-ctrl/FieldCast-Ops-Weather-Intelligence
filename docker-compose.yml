@@ -3,8 +3,8 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: fieldcast
-      POSTGRES_PASSWORD: fieldcast
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
       POSTGRES_DB: fieldcast_ops
     ports:
       - "5432:5432"
@@ -26,7 +26,7 @@ services:
       - .env
     environment:
       PORT: 4000
-      DATABASE_URL: postgresql://fieldcast:fieldcast@postgres:5432/fieldcast_ops?schema=public
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/fieldcast_ops?schema=public
       REDIS_URL: redis://redis:6379
     depends_on:
       - postgres

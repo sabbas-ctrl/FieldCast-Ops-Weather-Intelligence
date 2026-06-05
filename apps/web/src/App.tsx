@@ -9,12 +9,15 @@ import {
   MapPin,
   Play,
   RefreshCw,
+  Search,
   Shield,
   SlidersHorizontal,
   UserPlus,
   Users
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import countries from "i18n-iso-countries";
+import enCountries from "i18n-iso-countries/langs/en.json";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CartesianGrid,
   Legend,
@@ -31,12 +34,13 @@ import { Panel } from "./components/ui/Panel";
 import { ProgressBar } from "./components/ui/ProgressBar";
 import { RiskBadge } from "./components/ui/RiskBadge";
 import { Stat } from "./components/ui/Stat";
-import { api, clearToken, getStoredToken } from "./services/api";
+import { ApiError, api, clearToken, getStoredToken } from "./services/api";
 import type {
   AnalysisResult,
   AuditLog,
   AuthPayload,
   Incident,
+  LocationResult,
   Member,
   ProviderStatus,
   RiskRule,
@@ -45,6 +49,8 @@ import type {
 } from "./types/domain";
 
 type View = "overview" | "sites" | "rules" | "incidents" | "provider" | "members" | "audit";
+
+countries.registerLocale(enCountries);
 
 const siteTemplates = [
   {
@@ -104,10 +110,119 @@ function formatDate(value?: string) {
   }).format(new Date(value));
 }
 
+const countryOptions = Object.entries(countries.getNames("en", { select: "official" }))
+  .map(([code, name]) => ({ code, name }))
+  .sort((left, right) => left.name.localeCompare(right.name));
+
+const defaultTimezoneByCountry: Record<string, string> = {
+  Pakistan: "Asia/Karachi",
+  Kenya: "Africa/Nairobi",
+  "United States": "America/New_York",
+  "United Kingdom": "Europe/London",
+  Canada: "America/Toronto",
+  Australia: "Australia/Sydney",
+  "United Arab Emirates": "Asia/Dubai",
+  "Saudi Arabia": "Asia/Riyadh",
+  India: "Asia/Kolkata",
+  Bangladesh: "Asia/Dhaka",
+  "Sri Lanka": "Asia/Colombo",
+  Nigeria: "Africa/Lagos",
+  "South Africa": "Africa/Johannesburg",
+  Egypt: "Africa/Cairo",
+  Germany: "Europe/Berlin",
+  France: "Europe/Paris",
+  Spain: "Europe/Madrid",
+  Italy: "Europe/Rome",
+  Netherlands: "Europe/Amsterdam",
+  Singapore: "Asia/Singapore"
+};
+
+const rawTimezoneOptions =
+  "supportedValuesOf" in Intl
+    ? (Intl.supportedValuesOf as (input: "timeZone") => string[])("timeZone")
+    : [
+        "Asia/Karachi",
+        "Africa/Nairobi",
+        "America/New_York",
+        "Europe/London",
+        "Asia/Dubai",
+        "Asia/Kolkata",
+        "Australia/Sydney"
+      ];
+
+function getTimezoneOffsetMinutes(timeZone: string) {
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(now);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const utcForZone = Date.UTC(
+    Number(values.year),
+    Number(values.month) - 1,
+    Number(values.day),
+    Number(values.hour),
+    Number(values.minute),
+    Number(values.second)
+  );
+  return Math.round((utcForZone - now.getTime()) / 60000);
+}
+
+function formatUtcOffset(minutes: number) {
+  const sign = minutes >= 0 ? "+" : "-";
+  const absolute = Math.abs(minutes);
+  const hours = String(Math.floor(absolute / 60)).padStart(2, "0");
+  const mins = String(absolute % 60).padStart(2, "0");
+  return `UTC${sign}${hours}:${mins}`;
+}
+
+const timezoneOptions = rawTimezoneOptions
+  .map((timeZone) => ({
+    value: timeZone,
+    offsetMinutes: getTimezoneOffsetMinutes(timeZone),
+    label: `(${formatUtcOffset(getTimezoneOffsetMinutes(timeZone))}) ${timeZone}`
+  }))
+  .sort((left, right) => left.offsetMinutes - right.offsetMinutes || left.value.localeCompare(right.value));
+
 function AuthScreen({ onAuthed }: { onAuthed: (payload: AuthPayload) => void }) {
-  const [mode, setMode] = useState<"login" | "individual" | "organisation">("login");
+  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [accountType, setAccountType] = useState<"individual" | "organisation">("individual");
+  const [countryCode, setCountryCode] = useState("PK");
+  const [timezone, setTimezone] = useState("Asia/Karachi");
+  const [locationQuery, setLocationQuery] = useState("");
+  const [locationResults, setLocationResults] = useState<LocationResult[]>([]);
+  const [selectedLocation, setSelectedLocation] = useState<LocationResult | null>(null);
+  const [locationLoading, setLocationLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const selectedCountry = countryOptions.find((option) => option.code === countryCode) ?? countryOptions[0]!;
+
+  function updateCountry(nextCountryCode: string) {
+    const nextCountry = countryOptions.find((option) => option.code === nextCountryCode) ?? selectedCountry;
+    setCountryCode(nextCountry.code);
+    setTimezone(defaultTimezoneByCountry[nextCountry.name] ?? timezone);
+    setLocationResults([]);
+    setSelectedLocation(null);
+  }
+
+  async function searchRegistrationLocation() {
+    setLocationLoading(true);
+    setError(null);
+    try {
+      const payload = await api.searchLocations(locationQuery, countryCode);
+      setLocationResults(payload.results);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Location search failed");
+    } finally {
+      setLocationLoading(false);
+    }
+  }
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -116,21 +231,25 @@ function AuthScreen({ onAuthed }: { onAuthed: (payload: AuthPayload) => void }) 
     const form = new FormData(event.currentTarget);
 
     try {
-      if (mode === "login") {
+      if (authMode === "login") {
         onAuthed(await api.login(String(form.get("email")), String(form.get("password"))));
-      } else if (mode === "individual") {
+      } else if (accountType === "individual") {
         onAuthed(
           await api.registerIndividual({
             fullName: String(form.get("fullName")),
             email: String(form.get("email")),
             password: String(form.get("password")),
-            defaultLocation: {
-              name: "Islamabad Saved Location",
-              country: "Pakistan",
-              latitude: 33.6844,
-              longitude: 73.0479,
-              timezone: "Asia/Karachi"
-            }
+            country: selectedCountry.name,
+            timezone,
+            defaultLocation: selectedLocation
+              ? {
+                  name: selectedLocation.name,
+                  country: selectedLocation.country || selectedCountry.name,
+                  latitude: selectedLocation.latitude,
+                  longitude: selectedLocation.longitude,
+                  timezone
+                }
+              : undefined
           })
         );
       } else {
@@ -140,8 +259,9 @@ function AuthScreen({ onAuthed }: { onAuthed: (payload: AuthPayload) => void }) 
             adminFullName: String(form.get("adminFullName")),
             adminEmail: String(form.get("adminEmail")),
             password: String(form.get("password")),
-            country: String(form.get("country")),
-            timezone: String(form.get("timezone"))
+            industry: String(form.get("industry")),
+            country: selectedCountry.name,
+            timezone
           })
         );
       }
@@ -186,16 +306,16 @@ function AuthScreen({ onAuthed }: { onAuthed: (payload: AuthPayload) => void }) 
 
         <Panel className="min-h-[520px]">
           <div className="mb-5 flex rounded-md bg-slate-100 p-1">
-            {(["login", "individual", "organisation"] as const).map((item) => (
+            {(["login", "register"] as const).map((item) => (
               <button
                 key={item}
                 className={`min-h-10 flex-1 rounded-md px-3 text-sm font-bold capitalize ${
-                  mode === item ? "bg-white text-ink shadow-sm" : "text-slate-500"
+                  authMode === item ? "bg-white text-ink shadow-sm" : "text-slate-500"
                 }`}
-                onClick={() => setMode(item)}
+                onClick={() => setAuthMode(item)}
                 type="button"
               >
-                {item}
+                {item === "login" ? "Sign in" : "Create account"}
               </button>
             ))}
           </div>
@@ -203,55 +323,147 @@ function AuthScreen({ onAuthed }: { onAuthed: (payload: AuthPayload) => void }) 
           {error ? <div className="mb-4 rounded-md bg-red-50 p-3 text-sm font-semibold text-danger">{error}</div> : null}
 
           <form className="space-y-4" onSubmit={submit}>
-            {mode === "login" ? (
+            {authMode === "login" ? (
               <>
+                <div>
+                  <h2 className="text-xl font-bold text-ink">Sign in</h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    One login works for personal accounts and organisation members.
+                  </p>
+                </div>
                 <Field label="Email">
-                  <TextInput name="email" defaultValue="demo@fieldcast.local" type="email" required />
+                  <TextInput name="email" autoComplete="email" type="email" required />
                 </Field>
                 <Field label="Password">
-                  <TextInput name="password" defaultValue="FieldCast123!" type="password" required />
-                </Field>
-              </>
-            ) : mode === "individual" ? (
-              <>
-                <Field label="Full name">
-                  <TextInput name="fullName" defaultValue="Personal Demo User" required />
-                </Field>
-                <Field label="Email">
-                  <TextInput name="email" defaultValue={`personal-${Date.now()}@fieldcast.local`} type="email" required />
-                </Field>
-                <Field label="Password">
-                  <TextInput name="password" defaultValue="FieldCast123!" type="password" required />
+                  <TextInput name="password" autoComplete="current-password" type="password" required />
                 </Field>
               </>
             ) : (
               <>
-                <Field label="Organisation name">
-                  <TextInput name="organisationName" defaultValue="North Region Field Ops" required />
-                </Field>
-                <Field label="Admin full name">
-                  <TextInput name="adminFullName" defaultValue="Operations Owner" required />
-                </Field>
-                <Field label="Admin email">
-                  <TextInput name="adminEmail" defaultValue={`org-${Date.now()}@fieldcast.local`} type="email" required />
-                </Field>
-                <Field label="Password">
-                  <TextInput name="password" defaultValue="FieldCast123!" type="password" required />
-                </Field>
+                <div>
+                  <h2 className="text-xl font-bold text-ink">Register</h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Personal accounts use FieldCast-managed demo weather access. Organisations connect their own WeatherAI key.
+                  </p>
+                </div>
+                <div className="flex rounded-md bg-slate-100 p-1">
+                  {(["individual", "organisation"] as const).map((item) => (
+                    <button
+                      key={item}
+                      className={`min-h-10 flex-1 rounded-md px-3 text-sm font-bold capitalize ${
+                        accountType === item ? "bg-white text-ink shadow-sm" : "text-slate-500"
+                      }`}
+                      onClick={() => setAccountType(item)}
+                      type="button"
+                    >
+                      {item === "individual" ? "Individual" : "Organisation"}
+                    </button>
+                  ))}
+                </div>
+                {accountType === "individual" ? (
+                  <>
+                    <Field label="Full name">
+                      <TextInput name="fullName" autoComplete="name" required />
+                    </Field>
+                    <Field label="Email">
+                      <TextInput name="email" autoComplete="email" type="email" required />
+                    </Field>
+                    <Field label="Password">
+                      <TextInput name="password" autoComplete="new-password" type="password" required />
+                    </Field>
+                  </>
+                ) : (
+                  <>
+                    <Field label="Organisation name">
+                      <TextInput name="organisationName" autoComplete="organization" required />
+                    </Field>
+                    <Field label="Industry / use case">
+                      <SelectInput name="industry" defaultValue="Field operations">
+                        <option value="Field operations">Field operations</option>
+                        <option value="Agriculture">Agriculture</option>
+                        <option value="Construction">Construction</option>
+                        <option value="Logistics">Logistics</option>
+                        <option value="Events">Events</option>
+                        <option value="Facilities">Facilities</option>
+                      </SelectInput>
+                    </Field>
+                    <Field label="Admin full name">
+                      <TextInput name="adminFullName" autoComplete="name" required />
+                    </Field>
+                    <Field label="Admin email">
+                      <TextInput name="adminEmail" autoComplete="email" type="email" required />
+                    </Field>
+                    <Field label="Password">
+                      <TextInput name="password" autoComplete="new-password" type="password" required />
+                    </Field>
+                  </>
+                )}
                 <div className="grid gap-3 sm:grid-cols-2">
                   <Field label="Country">
-                    <TextInput name="country" defaultValue="Pakistan" required />
+                    <SelectInput value={countryCode} onChange={(event) => updateCountry(event.target.value)} required>
+                      {countryOptions.map((option) => (
+                        <option key={option.code} value={option.code}>
+                          {option.name}
+                        </option>
+                      ))}
+                    </SelectInput>
                   </Field>
                   <Field label="Timezone">
-                    <TextInput name="timezone" defaultValue="Asia/Karachi" required />
+                    <SelectInput value={timezone} onChange={(event) => setTimezone(event.target.value)} required>
+                      {timezoneOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </SelectInput>
                   </Field>
                 </div>
+                {accountType === "individual" ? (
+                  <div className="space-y-2 rounded-md border border-slate-200 p-3">
+                    <Field label="Default location search">
+                      <div className="flex gap-2">
+                        <TextInput
+                          placeholder="Search any city, site, address, or landmark"
+                          value={locationQuery}
+                          onChange={(event) => setLocationQuery(event.target.value)}
+                        />
+                        <Button disabled={locationLoading || locationQuery.trim().length < 3} icon={<Search size={16} />} onClick={() => void searchRegistrationLocation()} type="button">
+                          Search
+                        </Button>
+                      </div>
+                    </Field>
+                    {selectedLocation ? (
+                      <div className="rounded-md bg-emerald-50 p-2 text-xs font-semibold text-safe">
+                        Selected: {selectedLocation.label}
+                      </div>
+                    ) : null}
+                    {locationResults.length > 0 ? (
+                      <div className="max-h-44 overflow-auto rounded-md border border-slate-200">
+                        {locationResults.map((location) => (
+                          <button
+                            className="block w-full border-b border-slate-100 px-3 py-2 text-left text-sm hover:bg-slate-50"
+                            key={location.id}
+                            onClick={() => {
+                              setSelectedLocation(location);
+                              setLocationQuery(location.label);
+                            }}
+                            type="button"
+                          >
+                            <span className="font-semibold text-ink">{location.name}</span>
+                            <span className="block text-xs text-slate-500">{location.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                    <p className="text-xs text-slate-500">Powered by OpenStreetMap Nominatim.</p>
+                  </div>
+                ) : null}
               </>
             )}
 
             <div className="flex flex-wrap gap-3 pt-2">
               <Button disabled={busy} type="submit" variant="primary" icon={<CheckCircle2 size={17} />}>
-                Continue
+                {authMode === "login" ? "Sign in" : "Create account"}
               </Button>
               <Button disabled={busy} type="button" onClick={demoLogin} icon={<Play size={17} />}>
                 Demo Workspace
@@ -269,6 +481,7 @@ export function App() {
   const [view, setView] = useState<View>("overview");
   const [loading, setLoading] = useState(Boolean(getStoredToken()));
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [sites, setSites] = useState<Site[]>([]);
   const [selectedSiteId, setSelectedSiteId] = useState<string>("");
   const [rules, setRules] = useState<RiskRule[]>([]);
@@ -281,8 +494,17 @@ export function App() {
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [providerKey, setProviderKey] = useState("wai_demo_free_34bf");
   const [templateIndex, setTemplateIndex] = useState(0);
+  const [siteLocationQuery, setSiteLocationQuery] = useState("");
+  const [siteLocationResults, setSiteLocationResults] = useState<LocationResult[]>([]);
+  const [selectedSiteLocation, setSelectedSiteLocation] = useState<LocationResult | null>(null);
+  const [siteLocationLoading, setSiteLocationLoading] = useState(false);
+  const [siteTimezone, setSiteTimezone] = useState("Asia/Karachi");
+  const [siteType, setSiteType] = useState<Site["siteType"]>("FIELD_WORK_SITE");
   const [inviteLink, setInviteLink] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const selectedSiteIdRef = useRef("");
+  const loadedRulesForSiteIdRef = useRef("");
+  const workspaceIdRef = useRef<string | null>(null);
 
   const selectedSite = useMemo(
     () => sites.find((site) => site.id === selectedSiteId) ?? sites[0] ?? null,
@@ -291,6 +513,7 @@ export function App() {
 
   const loadRules = useCallback(async (siteId: string) => {
     const nextRules = await api.rules(siteId);
+    loadedRulesForSiteIdRef.current = siteId;
     setRules(nextRules);
     setRuleDrafts(
       Object.fromEntries(
@@ -307,39 +530,118 @@ export function App() {
     );
   }, []);
 
+  function clearWorkspaceData() {
+    selectedSiteIdRef.current = "";
+    loadedRulesForSiteIdRef.current = "";
+    setSites([]);
+    setSelectedSiteId("");
+    setRules([]);
+    setRuleDrafts({});
+    setAnalysis(null);
+    setIncidents([]);
+    setProvider(null);
+    setUsage(null);
+    setMembers([]);
+    setAuditLogs([]);
+  }
+
+  async function searchSiteLocation() {
+    setSiteLocationLoading(true);
+    setError(null);
+    try {
+      const payload = await api.searchLocations(siteLocationQuery);
+      setSiteLocationResults(payload.results);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Location search failed");
+    } finally {
+      setSiteLocationLoading(false);
+    }
+  }
+
   const loadDashboard = useCallback(async (payload?: AuthPayload) => {
     setLoading(true);
     setError(null);
+    let me: AuthPayload;
     try {
-      const me = payload ?? (await api.me());
-      setAuth(me);
-      const [siteList, providerStatus, incidentList, usageSummary, memberList, auditList] = await Promise.all([
-        api.sites(),
-        api.provider(),
-        api.incidents(),
-        api.usageSummary(),
-        api.members(me.workspace.id),
-        api.auditLogs()
-      ]);
-      setSites(siteList);
-      setProvider(providerStatus);
-      setIncidents(incidentList);
-      setUsage(usageSummary);
-      setMembers(memberList);
-      setAuditLogs(auditList);
-      const nextSiteId = selectedSiteId || siteList[0]?.id || "";
-      setSelectedSiteId(nextSiteId);
-      if (nextSiteId) {
-        await loadRules(nextSiteId);
+      me = payload ?? (await api.me());
+      if (workspaceIdRef.current !== me.workspace.id) {
+        clearWorkspaceData();
+        workspaceIdRef.current = me.workspace.id;
       }
+      setAuth(me);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Unable to load dashboard");
       clearToken();
       setAuth(null);
+      setLoading(false);
+      return;
+    }
+
+    try {
+      const canViewProvider = ["PERSONAL_OWNER", "ORG_OWNER", "IT_ADMIN", "OPS_ADMIN", "VIEWER"].includes(me.member.role);
+      const canViewMembers = ["ORG_OWNER", "IT_ADMIN", "OPS_ADMIN"].includes(me.member.role);
+      const canViewAudit = ["ORG_OWNER", "IT_ADMIN", "OPS_ADMIN"].includes(me.member.role);
+
+      const [siteResult, incidentResult, providerResult, usageResult, memberResult, auditResult] = await Promise.allSettled([
+        api.sites(),
+        api.incidents(),
+        canViewProvider ? api.provider() : Promise.resolve(null),
+        canViewProvider ? api.usageSummary() : Promise.resolve(null),
+        canViewMembers ? api.members(me.workspace.id) : Promise.resolve([]),
+        canViewAudit ? api.auditLogs() : Promise.resolve([])
+      ]);
+
+      if (siteResult.status === "fulfilled") {
+        setSites(siteResult.value);
+        const currentSiteId = selectedSiteIdRef.current;
+        const currentSiteStillExists = siteResult.value.some((site) => site.id === currentSiteId);
+        const nextSiteId = currentSiteStillExists ? currentSiteId : siteResult.value[0]?.id || "";
+        selectedSiteIdRef.current = nextSiteId;
+        setSelectedSiteId(nextSiteId);
+        if (nextSiteId) {
+          await loadRules(nextSiteId);
+        } else {
+          setRules([]);
+        }
+      }
+      if (incidentResult.status === "fulfilled") {
+        setIncidents(incidentResult.value);
+      }
+      if (providerResult.status === "fulfilled") {
+        setProvider(providerResult.value);
+        if (me.workspace.type === "ORGANISATION" && !providerResult.value?.connection) {
+          setView("provider");
+          setNotice("WeatherAI is not connected for this organisation. Ask IT to connect a key before analysis.");
+        }
+      }
+      if (usageResult.status === "fulfilled") {
+        setUsage(usageResult.value);
+      }
+      if (memberResult.status === "fulfilled") {
+        setMembers(memberResult.value);
+      }
+      if (auditResult.status === "fulfilled") {
+        setAuditLogs(auditResult.value);
+      }
+
+      const firstFailure = [siteResult, incidentResult, providerResult, usageResult, memberResult, auditResult].find(
+        (result) => result.status === "rejected"
+      ) as PromiseRejectedResult | undefined;
+      if (firstFailure?.reason instanceof ApiError && firstFailure.reason.status === 401) {
+        clearToken();
+        setAuth(null);
+        setError("Your session expired. Please sign in again.");
+        return;
+      }
+      if (firstFailure) {
+        setNotice(firstFailure.reason instanceof Error ? firstFailure.reason.message : "Some dashboard data could not be loaded.");
+      }
+    } catch (caught) {
+      setNotice(caught instanceof Error ? caught.message : "Some dashboard data could not be loaded.");
     } finally {
       setLoading(false);
     }
-  }, [loadRules, selectedSiteId]);
+  }, [loadRules]);
 
   useEffect(() => {
     if (getStoredToken()) {
@@ -348,7 +650,8 @@ export function App() {
   }, [loadDashboard]);
 
   useEffect(() => {
-    if (selectedSiteId) {
+    if (selectedSiteId && loadedRulesForSiteIdRef.current !== selectedSiteId) {
+      selectedSiteIdRef.current = selectedSiteId;
       void loadRules(selectedSiteId).catch((caught) => setError(caught instanceof Error ? caught.message : "Unable to load rules"));
     }
   }, [loadRules, selectedSiteId]);
@@ -363,11 +666,17 @@ export function App() {
       const result = await api.analyse(siteId);
       setAnalysis(result);
       setIncidents(await api.incidents());
-      setUsage(await api.usageSummary());
-      setAuditLogs(await api.auditLogs());
+      if (auth && ["PERSONAL_OWNER", "ORG_OWNER", "IT_ADMIN", "OPS_ADMIN", "VIEWER"].includes(auth.member.role)) {
+        await api.usageSummary().then(setUsage).catch(() => undefined);
+      }
+      if (auth && ["ORG_OWNER", "IT_ADMIN", "OPS_ADMIN"].includes(auth.member.role)) {
+        await api.auditLogs().then(setAuditLogs).catch(() => undefined);
+      }
       setView("overview");
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Analysis failed");
+      const message = caught instanceof Error ? caught.message : "Analysis failed";
+      setError(message);
+      setNotice(message);
     } finally {
       setBusyAction(null);
     }
@@ -376,6 +685,8 @@ export function App() {
   async function logout() {
     await api.logout().catch(() => undefined);
     clearToken();
+    workspaceIdRef.current = null;
+    clearWorkspaceData();
     setAuth(null);
   }
 
@@ -402,15 +713,19 @@ export function App() {
       rain: hour.precipitationProbability,
       wind: hour.windSpeedKph
     })) ?? [];
+  const canManageProvider = auth.member.role === "ORG_OWNER" || auth.member.role === "IT_ADMIN";
+  const canViewProvider = ["PERSONAL_OWNER", "ORG_OWNER", "IT_ADMIN", "OPS_ADMIN", "VIEWER"].includes(auth.member.role);
+  const canViewMembers = ["ORG_OWNER", "IT_ADMIN", "OPS_ADMIN"].includes(auth.member.role);
+  const canViewAudit = ["ORG_OWNER", "IT_ADMIN", "OPS_ADMIN"].includes(auth.member.role);
 
   const navItems: Array<{ id: View; label: string; icon: React.ReactNode }> = [
     { id: "overview", label: "Overview", icon: <BarChart3 size={18} /> },
     { id: "sites", label: "Sites", icon: <MapPin size={18} /> },
     { id: "rules", label: "Rules", icon: <SlidersHorizontal size={18} /> },
     { id: "incidents", label: "Incidents", icon: <AlertTriangle size={18} /> },
-    { id: "provider", label: "Provider", icon: <KeyRound size={18} /> },
-    { id: "members", label: "Members", icon: <Users size={18} /> },
-    { id: "audit", label: "Audit", icon: <Shield size={18} /> }
+    ...(canViewProvider ? [{ id: "provider" as const, label: "Provider", icon: <KeyRound size={18} /> }] : []),
+    ...(canViewMembers ? [{ id: "members" as const, label: "Members", icon: <Users size={18} /> }] : []),
+    ...(canViewAudit ? [{ id: "audit" as const, label: "Audit", icon: <Shield size={18} /> }] : [])
   ];
 
   return (
@@ -463,6 +778,22 @@ export function App() {
           </header>
 
           {error ? <div className="mb-4 rounded-md bg-red-50 p-3 text-sm font-semibold text-danger">{error}</div> : null}
+          {notice ? (
+            <div className="fixed right-4 top-4 z-50 max-w-sm rounded-lg border border-amber-200 bg-white p-4 text-sm font-semibold text-ink shadow-soft">
+              <div className="flex items-start justify-between gap-3">
+                <span>{notice}</span>
+                <button className="text-slate-400 hover:text-slate-700" onClick={() => setNotice(null)} type="button">
+                  x
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          {auth.workspace.type === "ORGANISATION" && !provider?.connection ? (
+            <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-slate-800">
+              <strong>WeatherAI connection required.</strong> Organisation analysis is locked until an Owner or IT Admin connects a WeatherAI API key in Provider Centre.
+            </div>
+          ) : null}
 
           {view === "overview" ? (
             <div className="space-y-5">
@@ -581,6 +912,102 @@ export function App() {
               </Panel>
               <Panel title="Add Site">
                 <div className="space-y-3">
+                  <Field label="Search global location">
+                    <div className="flex gap-2">
+                      <TextInput
+                        placeholder="Search any city, address, site, or landmark"
+                        value={siteLocationQuery}
+                        onChange={(event) => setSiteLocationQuery(event.target.value)}
+                      />
+                      <Button
+                        disabled={siteLocationLoading || siteLocationQuery.trim().length < 3}
+                        icon={<Search size={16} />}
+                        onClick={() => void searchSiteLocation()}
+                        type="button"
+                      >
+                        Search
+                      </Button>
+                    </div>
+                  </Field>
+                  {siteLocationResults.length > 0 ? (
+                    <div className="max-h-48 overflow-auto rounded-md border border-slate-200">
+                      {siteLocationResults.map((location) => (
+                        <button
+                          className="block w-full border-b border-slate-100 px-3 py-2 text-left text-sm hover:bg-slate-50"
+                          key={location.id}
+                          onClick={() => {
+                            setSelectedSiteLocation(location);
+                            setSiteLocationQuery(location.label);
+                          }}
+                          type="button"
+                        >
+                          <span className="font-semibold text-ink">{location.name}</span>
+                          <span className="block text-xs text-slate-500">{location.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                  {selectedSiteLocation ? (
+                    <div className="rounded-md bg-blue-50 p-2 text-xs font-semibold text-ocean">
+                      Selected: {selectedSiteLocation.label}
+                    </div>
+                  ) : null}
+                  <Field label="Site type">
+                    <SelectInput value={siteType} onChange={(event) => setSiteType(event.target.value as Site["siteType"])}>
+                      <option value="FIELD_WORK_SITE">Field Work Site</option>
+                      <option value="FARM_PLANTATION">Farm / Plantation</option>
+                      <option value="CONSTRUCTION_SITE">Construction Site</option>
+                      <option value="DELIVERY_HUB">Delivery Hub</option>
+                      <option value="EVENT_VENUE">Event Venue</option>
+                      <option value="CAMPUS_OUTDOOR_FACILITY">Campus / Outdoor Facility</option>
+                      <option value="OTHER">Other</option>
+                    </SelectInput>
+                  </Field>
+                  <Field label="Site timezone">
+                    <SelectInput value={siteTimezone} onChange={(event) => setSiteTimezone(event.target.value)}>
+                      {timezoneOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </SelectInput>
+                  </Field>
+                  <Button
+                    className="w-full"
+                    disabled={!selectedSiteLocation}
+                    icon={<MapPin size={17} />}
+                    onClick={async () => {
+                      if (!selectedSiteLocation) {
+                        return;
+                      }
+                      setBusyAction("create-site-location");
+                      try {
+                        await api.createSite({
+                          name: selectedSiteLocation.name,
+                          description: selectedSiteLocation.label,
+                          siteType,
+                          country: selectedSiteLocation.country,
+                          latitude: selectedSiteLocation.latitude,
+                          longitude: selectedSiteLocation.longitude,
+                          timezone: siteTimezone,
+                          units: "METRIC",
+                          monitoringEnabled: true
+                        });
+                        setSelectedSiteLocation(null);
+                        setSiteLocationQuery("");
+                        setSiteLocationResults([]);
+                        await loadDashboard();
+                      } catch (caught) {
+                        setError(caught instanceof Error ? caught.message : "Unable to create site");
+                      } finally {
+                        setBusyAction(null);
+                      }
+                    }}
+                    variant="primary"
+                  >
+                    Add Searched Location
+                  </Button>
+                  <div className="border-t border-slate-200 pt-3" />
                   <Field label="Template">
                     <SelectInput value={templateIndex} onChange={(event) => setTemplateIndex(Number(event.target.value))}>
                       {siteTemplates.map((template, index) => (
@@ -781,33 +1208,42 @@ export function App() {
                   </div>
                 </div>
               </Panel>
-              <Panel title="Connect Key">
-                <div className="space-y-3">
-                  <Field label="WeatherAI API key">
-                    <TextInput value={providerKey} onChange={(event) => setProviderKey(event.target.value)} />
-                  </Field>
-                  <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
-                    <Button
-                      icon={<KeyRound size={17} />}
-                      onClick={async () => {
-                        setProvider(await api.connectProvider(providerKey));
-                        setAuditLogs(await api.auditLogs());
-                      }}
-                      variant="primary"
-                    >
-                      Connect
-                    </Button>
-                    <Button
-                      icon={<RefreshCw size={17} />}
-                      onClick={async () => {
-                        setProvider(await api.syncProvider());
-                      }}
-                    >
-                      Sync Usage
-                    </Button>
+              {canManageProvider ? (
+                <Panel title="Connect Key">
+                  <div className="space-y-3">
+                    <Field label="WeatherAI API key">
+                      <TextInput value={providerKey} onChange={(event) => setProviderKey(event.target.value)} />
+                    </Field>
+                    <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
+                      <Button
+                        icon={<KeyRound size={17} />}
+                        onClick={async () => {
+                          setProvider(await api.connectProvider(providerKey));
+                          setAuditLogs(await api.auditLogs());
+                        }}
+                        variant="primary"
+                      >
+                        Connect
+                      </Button>
+                      <Button
+                        icon={<RefreshCw size={17} />}
+                        onClick={async () => {
+                          setProvider(await api.syncProvider());
+                        }}
+                      >
+                        Sync Usage
+                      </Button>
+                    </div>
                   </div>
-                </div>
-              </Panel>
+                </Panel>
+              ) : (
+                <Panel title="IT Required">
+                  <div className="space-y-3 text-sm text-slate-600">
+                    <p>WeatherAI keys can only be connected by an Organisation Owner or IT Admin.</p>
+                    <p>Contact your IT administrator if analysis is locked for this workspace.</p>
+                  </div>
+                </Panel>
+              )}
             </div>
           ) : null}
 

@@ -174,3 +174,15 @@ export type AuditLog = {
   metadataJson?: Record<string, unknown>;
   createdAt: string;
 };
+
+export type LocationResult = {
+  id: string;
+  label: string;
+  name: string;
+  country: string;
+  countryCode: string;
+  region: string;
+  latitude: number;
+  longitude: number;
+  category: string;
+};

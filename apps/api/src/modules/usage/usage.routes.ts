@@ -12,7 +12,7 @@ router.get(
   "/events",
   requirePermission("provider.view_usage"),
   asyncHandler(async (request, response) => {
-    response.json(listUsageEvents(request.auth!.workspaceId));
+    response.json(await listUsageEvents(request.auth!.workspaceId));
   })
 );
 
@@ -20,7 +20,7 @@ router.get(
   "/summary",
   requirePermission("provider.view_usage"),
   asyncHandler(async (request, response) => {
-    response.json(usageSummary(request.auth!.workspaceId));
+    response.json(await usageSummary(request.auth!.workspaceId));
   })
 );
 

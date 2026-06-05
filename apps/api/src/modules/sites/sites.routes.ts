@@ -12,7 +12,7 @@ router.get(
   "/",
   requirePermission("sites.view"),
   asyncHandler(async (request, response) => {
-    response.json(listSites(request.auth!.workspaceId));
+    response.json(await listSites(request.auth!.workspaceId));
   })
 );
 
@@ -21,7 +21,7 @@ router.post(
   requirePermission("sites.create"),
   asyncHandler(async (request, response) => {
     const body = siteInputSchema.parse(request.body);
-    response.status(201).json(createSite(request.auth!.workspaceId, request.auth!.memberId, body));
+    response.status(201).json(await createSite(request.auth!.workspaceId, request.auth!.memberId, body));
   })
 );
 
@@ -29,7 +29,7 @@ router.get(
   "/:siteId",
   requirePermission("sites.view"),
   asyncHandler(async (request, response) => {
-    response.json(getSite(request.auth!.workspaceId, routeParam(request.params.siteId, "siteId")));
+    response.json(await getSite(request.auth!.workspaceId, routeParam(request.params.siteId, "siteId")));
   })
 );
 
@@ -38,7 +38,7 @@ router.patch(
   requirePermission("sites.update"),
   asyncHandler(async (request, response) => {
     const body = siteInputSchema.partial().parse(request.body);
-    response.json(updateSite(request.auth!.workspaceId, request.auth!.memberId, routeParam(request.params.siteId, "siteId"), body));
+    response.json(await updateSite(request.auth!.workspaceId, request.auth!.memberId, routeParam(request.params.siteId, "siteId"), body));
   })
 );
 
@@ -46,7 +46,7 @@ router.delete(
   "/:siteId",
   requirePermission("sites.delete"),
   asyncHandler(async (request, response) => {
-    deleteSite(request.auth!.workspaceId, request.auth!.memberId, routeParam(request.params.siteId, "siteId"));
+    await deleteSite(request.auth!.workspaceId, request.auth!.memberId, routeParam(request.params.siteId, "siteId"));
     response.status(204).send();
   })
 );

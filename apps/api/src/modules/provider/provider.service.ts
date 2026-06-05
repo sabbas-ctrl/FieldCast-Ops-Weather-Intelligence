@@ -1,9 +1,9 @@
 import { z } from "zod";
+import { prisma } from "../../infrastructure/prisma/client.js";
 import { decryptApiKey, encryptApiKey, maskApiKey } from "../../infrastructure/encryption/apiKeyCrypto.js";
 import { HttpError } from "../../utils/http.js";
 import { createId } from "../../utils/id.js";
-import { createAuditLog, store } from "../demo/store.js";
-import type { ProviderConnection, ProviderUsageSnapshot } from "../demo/store.js";
+import { createAuditLog } from "../db/helpers.js";
 import { fetchProviderUsage, resolveCapabilities } from "./weatherai.adapter.js";
 
 export const apiKeySchema = z.string().regex(/^wai_[A-Za-z0-9_\-]{6,}$/u, "WeatherAI API keys must start with wai_");
@@ -12,51 +12,49 @@ export async function connectProvider(workspaceId: string, actorMemberId: string
   const verifiedKey = apiKeySchema.parse(apiKey);
   const usage = await fetchProviderUsage(verifiedKey);
   const capabilities = resolveCapabilities(usage);
-  const now = new Date().toISOString();
+  const now = new Date();
+  const existing = await prisma.providerConnection.findFirst({ where: { workspaceId } });
 
-  const existing = store.providerConnections.find((connection) => connection.workspaceId === workspaceId);
-  const connection: ProviderConnection = existing ?? {
-    id: createId("pvc"),
-    workspaceId,
-    providerName: "WeatherAI",
-    encryptedApiKey: "",
-    maskedKey: "",
-    connectionStatus: "ACTIVE",
-    capabilityTier: "UNKNOWN",
-    requestLimit: 0,
-    aiRequestLimit: 0,
-    forecastDays: 7,
-    webhooksEnabled: false,
-    smsEligible: false,
-    smsApproved: false,
-    lastVerifiedAt: now,
-    createdAt: now
-  };
+  const connection = existing
+    ? await prisma.providerConnection.update({
+        where: { id: existing.id },
+        data: {
+          encryptedApiKey: encryptApiKey(verifiedKey),
+          maskedKey: maskApiKey(verifiedKey),
+          connectionStatus: "ACTIVE",
+          lastVerifiedAt: now,
+          ...capabilities
+        }
+      })
+    : await prisma.providerConnection.create({
+        data: {
+          id: createId("pvc"),
+          workspaceId,
+          providerName: "WeatherAI",
+          encryptedApiKey: encryptApiKey(verifiedKey),
+          maskedKey: maskApiKey(verifiedKey),
+          connectionStatus: "ACTIVE",
+          lastVerifiedAt: now,
+          createdAt: now,
+          ...capabilities
+        }
+      });
 
-  connection.encryptedApiKey = encryptApiKey(verifiedKey);
-  connection.maskedKey = maskApiKey(verifiedKey);
-  connection.connectionStatus = "ACTIVE";
-  connection.lastVerifiedAt = now;
-  Object.assign(connection, capabilities);
+  await prisma.providerUsageSnapshot.create({
+    data: {
+      id: createId("pus"),
+      workspaceId,
+      requestsUsed: usage.requestsUsed,
+      requestLimit: usage.requestLimit,
+      aiRequestsUsed: usage.aiRequestsUsed,
+      aiRequestLimit: usage.aiRequestLimit,
+      periodStart: new Date(usage.periodStart),
+      periodEnd: new Date(usage.periodEnd),
+      capturedAt: now
+    }
+  });
 
-  if (!existing) {
-    store.providerConnections.unshift(connection);
-  }
-
-  const snapshot: ProviderUsageSnapshot = {
-    id: createId("pus"),
-    workspaceId,
-    requestsUsed: usage.requestsUsed,
-    requestLimit: usage.requestLimit,
-    aiRequestsUsed: usage.aiRequestsUsed,
-    aiRequestLimit: usage.aiRequestLimit,
-    periodStart: usage.periodStart,
-    periodEnd: usage.periodEnd,
-    capturedAt: now
-  };
-  store.providerUsageSnapshots.unshift(snapshot);
-
-  createAuditLog({
+  await createAuditLog({
     workspaceId,
     actorMemberId,
     action: existing ? "provider.key_replaced" : "provider.connected",
@@ -72,16 +70,17 @@ export async function connectProvider(workspaceId: string, actorMemberId: string
   return getProviderStatus(workspaceId);
 }
 
-export function getProviderStatus(workspaceId: string) {
-  const workspace = store.workspaces.find((candidate) => candidate.id === workspaceId);
+export async function getProviderStatus(workspaceId: string) {
+  const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId } });
   if (!workspace) {
     throw new HttpError(404, "Workspace not found");
   }
 
-  const connection = store.providerConnections.find((candidate) => candidate.workspaceId === workspaceId);
-  const latestUsage = getLatestUsage(workspaceId);
+  const connection = await prisma.providerConnection.findFirst({ where: { workspaceId } });
+  const latestUsage = await getLatestUsage(workspaceId);
 
   if (!connection && workspace.providerMode === "PLATFORM_MANAGED") {
+    const now = new Date();
     return {
       mode: "PLATFORM_MANAGED",
       connection: null,
@@ -90,9 +89,9 @@ export function getProviderStatus(workspaceId: string) {
         requestLimit: 1000,
         aiRequestsUsed: 0,
         aiRequestLimit: 200,
-        periodStart: new Date().toISOString(),
-        periodEnd: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30).toISOString(),
-        capturedAt: new Date().toISOString()
+        periodStart: now,
+        periodEnd: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30),
+        capturedAt: now
       },
       capabilities: {
         capabilityTier: "FREE",
@@ -106,7 +105,7 @@ export function getProviderStatus(workspaceId: string) {
 
   return {
     mode: workspace.providerMode,
-    connection: connection ? sanitizeConnection(connection).connection : null,
+    connection: connection ? sanitizeConnection(connection) : null,
     usage: latestUsage,
     capabilities: connection
       ? {
@@ -120,18 +119,17 @@ export function getProviderStatus(workspaceId: string) {
   };
 }
 
-export function getLatestUsage(workspaceId: string) {
-  return (
-    store.providerUsageSnapshots
-      .filter((snapshot) => snapshot.workspaceId === workspaceId)
-      .sort((left, right) => right.capturedAt.localeCompare(left.capturedAt))[0] ?? null
-  );
+export async function getLatestUsage(workspaceId: string) {
+  return prisma.providerUsageSnapshot.findFirst({
+    where: { workspaceId },
+    orderBy: { capturedAt: "desc" }
+  });
 }
 
 export async function syncProviderUsage(workspaceId: string, actorMemberId: string) {
-  const connection = store.providerConnections.find(
-    (candidate) => candidate.workspaceId === workspaceId && candidate.connectionStatus === "ACTIVE"
-  );
+  const connection = await prisma.providerConnection.findFirst({
+    where: { workspaceId, connectionStatus: "ACTIVE" }
+  });
   if (!connection) {
     throw new HttpError(404, "No active provider connection found");
   }
@@ -142,24 +140,31 @@ export async function syncProviderUsage(workspaceId: string, actorMemberId: stri
       : decryptApiKey(connection.encryptedApiKey);
   const usage = await fetchProviderUsage(apiKey);
   const capabilities = resolveCapabilities(usage);
-  const now = new Date().toISOString();
+  const now = new Date();
 
-  Object.assign(connection, capabilities, { lastVerifiedAt: now });
+  await prisma.providerConnection.update({
+    where: { id: connection.id },
+    data: {
+      ...capabilities,
+      lastVerifiedAt: now
+    }
+  });
 
-  const snapshot: ProviderUsageSnapshot = {
-    id: createId("pus"),
-    workspaceId,
-    requestsUsed: usage.requestsUsed,
-    requestLimit: usage.requestLimit,
-    aiRequestsUsed: usage.aiRequestsUsed,
-    aiRequestLimit: usage.aiRequestLimit,
-    periodStart: usage.periodStart,
-    periodEnd: usage.periodEnd,
-    capturedAt: now
-  };
-  store.providerUsageSnapshots.unshift(snapshot);
+  await prisma.providerUsageSnapshot.create({
+    data: {
+      id: createId("pus"),
+      workspaceId,
+      requestsUsed: usage.requestsUsed,
+      requestLimit: usage.requestLimit,
+      aiRequestsUsed: usage.aiRequestsUsed,
+      aiRequestLimit: usage.aiRequestLimit,
+      periodStart: new Date(usage.periodStart),
+      periodEnd: new Date(usage.periodEnd),
+      capturedAt: now
+    }
+  });
 
-  createAuditLog({
+  await createAuditLog({
     workspaceId,
     actorMemberId,
     action: "provider.usage_synced",
@@ -170,14 +175,18 @@ export async function syncProviderUsage(workspaceId: string, actorMemberId: stri
   return getProviderStatus(workspaceId);
 }
 
-export function disconnectProvider(workspaceId: string, actorMemberId: string) {
-  const connection = store.providerConnections.find((candidate) => candidate.workspaceId === workspaceId);
+export async function disconnectProvider(workspaceId: string, actorMemberId: string) {
+  const connection = await prisma.providerConnection.findFirst({ where: { workspaceId } });
   if (!connection) {
     throw new HttpError(404, "Provider connection not found");
   }
 
-  connection.connectionStatus = "DISCONNECTED";
-  createAuditLog({
+  await prisma.providerConnection.update({
+    where: { id: connection.id },
+    data: { connectionStatus: "DISCONNECTED" }
+  });
+
+  await createAuditLog({
     workspaceId,
     actorMemberId,
     action: "provider.disconnected",
@@ -188,10 +197,7 @@ export function disconnectProvider(workspaceId: string, actorMemberId: string) {
   return getProviderStatus(workspaceId);
 }
 
-function sanitizeConnection(connection: ProviderConnection, usage?: ProviderUsageSnapshot) {
+function sanitizeConnection<T extends { encryptedApiKey: string }>(connection: T) {
   const { encryptedApiKey: _encryptedApiKey, ...safeConnection } = connection;
-  return {
-    connection: safeConnection,
-    usage: usage ?? getLatestUsage(connection.workspaceId)
-  };
+  return safeConnection;
 }

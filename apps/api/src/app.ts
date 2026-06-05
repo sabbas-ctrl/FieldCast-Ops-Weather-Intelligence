@@ -14,6 +14,7 @@ import { usageRouter } from "./modules/usage/usage.routes.js";
 import { auditRouter } from "./modules/audit/audit.routes.js";
 import { workspaceRouter } from "./modules/workspaces/workspaces.routes.js";
 import { invitationRouter } from "./modules/invitations/invitations.routes.js";
+import { locationsRouter } from "./modules/locations/locations.routes.js";
 import { errorHandler, notFoundHandler } from "./utils/http.js";
 
 const openApiDocument = {
@@ -54,6 +55,7 @@ export function createApp() {
 
   app.use("/docs", swaggerUi.serve, swaggerUi.setup(openApiDocument));
   app.use("/api/auth", authRouter);
+  app.use("/api/locations", locationsRouter);
   app.use("/api/workspaces", workspaceRouter);
   app.use("/api", invitationRouter);
   app.use("/api/provider", providerRouter);

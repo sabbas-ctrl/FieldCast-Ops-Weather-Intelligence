@@ -1,5 +1,5 @@
 import type { NextFunction, Request, Response } from "express";
-import type { MemberRole } from "../modules/demo/store.js";
+import type { MemberRole } from "@prisma/client";
 import { HttpError } from "../utils/http.js";
 
 export type Permission =
@@ -31,6 +31,7 @@ export type Permission =
 
 const rolePermissions: Record<MemberRole, Permission[]> = {
   PERSONAL_OWNER: [
+    "provider.view_usage",
     "sites.create",
     "sites.update",
     "sites.delete",

@@ -7,9 +7,31 @@ type CacheRecord = {
 };
 
 class CacheClient {
-  private redis: Redis | null = env.REDIS_URL ? new Redis(env.REDIS_URL, { lazyConnect: true }) : null;
+  private redis: Redis | null = this.createRedis();
   private memory = new Map<string, CacheRecord>();
   private redisReady = false;
+
+  private createRedis() {
+    if (!env.REDIS_URL) {
+      return null;
+    }
+
+    const redis = new Redis(env.REDIS_URL, {
+      enableOfflineQueue: false,
+      lazyConnect: true,
+      maxRetriesPerRequest: 1
+    });
+    redis.on("error", () => {
+      // Redis is optional in local development; failed connections fall back to memory cache.
+    });
+    return redis;
+  }
+
+  private disableRedis() {
+    this.redisReady = false;
+    this.redis?.disconnect();
+    this.redis = null;
+  }
 
   async get<T>(key: string) {
     if (this.redis) {
@@ -21,7 +43,7 @@ class CacheClient {
         const cached = await this.redis.get(key);
         return cached ? (JSON.parse(cached) as T) : null;
       } catch {
-        this.redis = null;
+        this.disableRedis();
       }
     }
 
@@ -44,7 +66,7 @@ class CacheClient {
         await this.redis.set(key, serialized, "EX", ttlSeconds);
         return;
       } catch {
-        this.redis = null;
+        this.disableRedis();
       }
     }
 

@@ -1,52 +1,65 @@
+import type { IncidentStatus, Severity } from "@prisma/client";
+import { prisma } from "../../infrastructure/prisma/client.js";
 import { HttpError } from "../../utils/http.js";
-import { createAuditLog, store } from "../demo/store.js";
-import type { IncidentStatus } from "../demo/store.js";
+import { createAuditLog } from "../db/helpers.js";
 
-export function listIncidents(
+export async function listIncidents(
   workspaceId: string,
-  filters: { siteId?: string; status?: IncidentStatus; severity?: string }
+  filters: { siteId?: string; status?: IncidentStatus; severity?: Severity }
 ) {
-  return store.incidents
-    .filter((incident) => incident.workspaceId === workspaceId)
-    .filter((incident) => (filters.siteId ? incident.siteId === filters.siteId : true))
-    .filter((incident) => (filters.status ? incident.status === filters.status : true))
-    .filter((incident) => (filters.severity ? incident.severity === filters.severity : true))
-    .map((incident) => ({
-      ...incident,
-      site: store.sites.find((site) => site.id === incident.siteId) ?? null,
-      rule: store.riskRules.find((rule) => rule.id === incident.ruleId) ?? null
-    }));
+  return prisma.incident.findMany({
+    where: {
+      workspaceId,
+      siteId: filters.siteId,
+      status: filters.status,
+      severity: filters.severity
+    },
+    include: {
+      site: true,
+      rule: true
+    },
+    orderBy: { createdAt: "desc" }
+  });
 }
 
-export function getIncident(workspaceId: string, incidentId: string) {
-  const incident = store.incidents.find(
-    (candidate) => candidate.workspaceId === workspaceId && candidate.id === incidentId
-  );
+export async function getIncident(workspaceId: string, incidentId: string) {
+  const incident = await prisma.incident.findFirst({
+    where: { workspaceId, id: incidentId },
+    include: { site: true, rule: true }
+  });
   if (!incident) {
     throw new HttpError(404, "Incident not found");
   }
-  return {
-    ...incident,
-    site: store.sites.find((site) => site.id === incident.siteId) ?? null,
-    rule: store.riskRules.find((rule) => rule.id === incident.ruleId) ?? null
-  };
+  return incident;
 }
 
-export function acknowledgeIncident(workspaceId: string, actorMemberId: string, incidentId: string) {
-  const incident = store.incidents.find(
-    (candidate) => candidate.workspaceId === workspaceId && candidate.id === incidentId
-  );
-  if (!incident) {
+export async function acknowledgeIncident(workspaceId: string, actorMemberId: string, incidentId: string) {
+  const existing = await prisma.incident.findFirst({ where: { workspaceId, id: incidentId } });
+  if (!existing) {
     throw new HttpError(404, "Incident not found");
   }
-  if (incident.status === "RESOLVED" || incident.status === "DISMISSED") {
+  if (existing.status === "RESOLVED" || existing.status === "DISMISSED") {
     throw new HttpError(409, "Incident is already closed");
   }
 
-  incident.status = "ACKNOWLEDGED";
-  incident.acknowledgedBy = actorMemberId;
-  incident.acknowledgedAt = new Date().toISOString();
-  createAuditLog({
+  const incident = await prisma.incident.update({
+    where: { id: incidentId },
+    data: {
+      status: "ACKNOWLEDGED",
+      acknowledgedBy: actorMemberId,
+      acknowledgedAt: new Date()
+    }
+  });
+
+  await prisma.incidentAction.create({
+    data: {
+      incidentId,
+      memberId: actorMemberId,
+      action: "ACKNOWLEDGED"
+    }
+  });
+
+  await createAuditLog({
     workspaceId,
     actorMemberId,
     action: "incident.acknowledged",
@@ -56,18 +69,30 @@ export function acknowledgeIncident(workspaceId: string, actorMemberId: string, 
   return incident;
 }
 
-export function resolveIncident(workspaceId: string, actorMemberId: string, incidentId: string) {
-  const incident = store.incidents.find(
-    (candidate) => candidate.workspaceId === workspaceId && candidate.id === incidentId
-  );
-  if (!incident) {
+export async function resolveIncident(workspaceId: string, actorMemberId: string, incidentId: string) {
+  const existing = await prisma.incident.findFirst({ where: { workspaceId, id: incidentId } });
+  if (!existing) {
     throw new HttpError(404, "Incident not found");
   }
 
-  incident.status = "RESOLVED";
-  incident.resolvedBy = actorMemberId;
-  incident.resolvedAt = new Date().toISOString();
-  createAuditLog({
+  const incident = await prisma.incident.update({
+    where: { id: incidentId },
+    data: {
+      status: "RESOLVED",
+      resolvedBy: actorMemberId,
+      resolvedAt: new Date()
+    }
+  });
+
+  await prisma.incidentAction.create({
+    data: {
+      incidentId,
+      memberId: actorMemberId,
+      action: "RESOLVED"
+    }
+  });
+
+  await createAuditLog({
     workspaceId,
     actorMemberId,
     action: "incident.resolved",

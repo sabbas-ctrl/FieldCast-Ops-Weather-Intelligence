@@ -20,7 +20,7 @@ router.get(
         severity: z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"]).optional()
       })
       .parse(request.query);
-    response.json(listIncidents(request.auth!.workspaceId, query));
+    response.json(await listIncidents(request.auth!.workspaceId, query));
   })
 );
 
@@ -28,7 +28,7 @@ router.get(
   "/:incidentId",
   requirePermission("incidents.view"),
   asyncHandler(async (request, response) => {
-    response.json(getIncident(request.auth!.workspaceId, routeParam(request.params.incidentId, "incidentId")));
+    response.json(await getIncident(request.auth!.workspaceId, routeParam(request.params.incidentId, "incidentId")));
   })
 );
 
@@ -36,7 +36,7 @@ router.patch(
   "/:incidentId/acknowledge",
   requirePermission("incidents.acknowledge"),
   asyncHandler(async (request, response) => {
-    response.json(acknowledgeIncident(request.auth!.workspaceId, request.auth!.memberId, routeParam(request.params.incidentId, "incidentId")));
+    response.json(await acknowledgeIncident(request.auth!.workspaceId, request.auth!.memberId, routeParam(request.params.incidentId, "incidentId")));
   })
 );
 
@@ -44,7 +44,7 @@ router.patch(
   "/:incidentId/resolve",
   requirePermission("incidents.resolve"),
   asyncHandler(async (request, response) => {
-    response.json(resolveIncident(request.auth!.workspaceId, request.auth!.memberId, routeParam(request.params.incidentId, "incidentId")));
+    response.json(await resolveIncident(request.auth!.workspaceId, request.auth!.memberId, routeParam(request.params.incidentId, "incidentId")));
   })
 );
 

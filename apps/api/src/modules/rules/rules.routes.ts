@@ -12,7 +12,7 @@ router.get(
   "/sites/:siteId/rules",
   requirePermission("rules.view"),
   asyncHandler(async (request, response) => {
-    response.json(listRules(request.auth!.workspaceId, routeParam(request.params.siteId, "siteId")));
+    response.json(await listRules(request.auth!.workspaceId, routeParam(request.params.siteId, "siteId")));
   })
 );
 
@@ -21,7 +21,7 @@ router.post(
   requirePermission("rules.create"),
   asyncHandler(async (request, response) => {
     const body = ruleInputSchema.parse(request.body);
-    response.status(201).json(createRule(request.auth!.workspaceId, request.auth!.memberId, routeParam(request.params.siteId, "siteId"), body));
+    response.status(201).json(await createRule(request.auth!.workspaceId, request.auth!.memberId, routeParam(request.params.siteId, "siteId"), body));
   })
 );
 
@@ -30,7 +30,7 @@ router.patch(
   requirePermission("rules.update"),
   asyncHandler(async (request, response) => {
     const body = ruleInputSchema.partial().parse(request.body);
-    response.json(updateRule(request.auth!.workspaceId, request.auth!.memberId, routeParam(request.params.ruleId, "ruleId"), body));
+    response.json(await updateRule(request.auth!.workspaceId, request.auth!.memberId, routeParam(request.params.ruleId, "ruleId"), body));
   })
 );
 
@@ -38,7 +38,7 @@ router.delete(
   "/rules/:ruleId",
   requirePermission("rules.delete"),
   asyncHandler(async (request, response) => {
-    deleteRule(request.auth!.workspaceId, request.auth!.memberId, routeParam(request.params.ruleId, "ruleId"));
+    await deleteRule(request.auth!.workspaceId, request.auth!.memberId, routeParam(request.params.ruleId, "ruleId"));
     response.status(204).send();
   })
 );

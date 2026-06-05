@@ -1,14 +1,15 @@
 import jwt from "jsonwebtoken";
 import type { NextFunction, Request, Response } from "express";
 import { env } from "../config/env.js";
-import { store } from "../modules/demo/store.js";
+import { prisma } from "../infrastructure/prisma/client.js";
 import { HttpError } from "../utils/http.js";
+import type { MemberRole } from "@prisma/client";
 
 type AccessTokenPayload = {
   userId: string;
   memberId: string;
   workspaceId: string;
-  role: string;
+  role: MemberRole;
 };
 
 export function signAccessToken(payload: AccessTokenPayload) {
@@ -19,7 +20,7 @@ export function signRefreshToken(payload: Pick<AccessTokenPayload, "userId" | "m
   return jwt.sign(payload, env.JWT_REFRESH_SECRET, { expiresIn: "14d" });
 }
 
-export function requireAuth(request: Request, _response: Response, next: NextFunction) {
+export async function requireAuth(request: Request, _response: Response, next: NextFunction) {
   const header = request.header("authorization");
   const token = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : undefined;
 
@@ -29,15 +30,15 @@ export function requireAuth(request: Request, _response: Response, next: NextFun
 
   try {
     const decoded = jwt.verify(token, env.JWT_ACCESS_SECRET) as AccessTokenPayload;
-    const member = store.members.find((candidate) => candidate.id === decoded.memberId);
-    if (!member || member.status !== "ACTIVE") {
+    const member = await prisma.workspaceMember.findUnique({ where: { id: decoded.memberId } });
+    if (!member || member.status !== "ACTIVE" || member.userId !== decoded.userId) {
       return next(new HttpError(401, "Workspace membership is not active"));
     }
 
     request.auth = {
       userId: decoded.userId,
       memberId: decoded.memberId,
-      workspaceId: decoded.workspaceId,
+      workspaceId: member.workspaceId,
       role: member.role
     };
     return next();
@@ -46,7 +47,7 @@ export function requireAuth(request: Request, _response: Response, next: NextFun
   }
 }
 
-export function optionalAuth(request: Request, _response: Response, next: NextFunction) {
+export async function optionalAuth(request: Request, _response: Response, next: NextFunction) {
   const header = request.header("authorization");
   const token = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : undefined;
 
@@ -56,12 +57,12 @@ export function optionalAuth(request: Request, _response: Response, next: NextFu
 
   try {
     const decoded = jwt.verify(token, env.JWT_ACCESS_SECRET) as AccessTokenPayload;
-    const member = store.members.find((candidate) => candidate.id === decoded.memberId);
-    if (member && member.status === "ACTIVE") {
+    const member = await prisma.workspaceMember.findUnique({ where: { id: decoded.memberId } });
+    if (member && member.status === "ACTIVE" && member.userId === decoded.userId) {
       request.auth = {
         userId: decoded.userId,
         memberId: decoded.memberId,
-        workspaceId: decoded.workspaceId,
+        workspaceId: member.workspaceId,
         role: member.role
       };
     }

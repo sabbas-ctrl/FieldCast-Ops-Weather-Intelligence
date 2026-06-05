@@ -3,6 +3,7 @@ import type {
   AuditLog,
   AuthPayload,
   Incident,
+  LocationResult,
   Member,
   ProviderStatus,
   RiskRule,
@@ -12,6 +13,15 @@ import type {
 
 const API_URL = import.meta.env.VITE_API_URL ?? "";
 const tokenKey = "fieldcast_access_token";
+
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number
+  ) {
+    super(message);
+  }
+}
 
 export function getStoredToken() {
   return localStorage.getItem(tokenKey);
@@ -25,7 +35,26 @@ export function clearToken() {
   localStorage.removeItem(tokenKey);
 }
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+async function refreshAccessToken() {
+  const response = await fetch(`${API_URL}/api/auth/refresh`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json"
+    }
+  });
+
+  if (!response.ok) {
+    clearToken();
+    throw new ApiError("Session expired. Please sign in again.", response.status);
+  }
+
+  const payload = (await response.json()) as AuthPayload;
+  storeToken(payload.accessToken);
+  return payload.accessToken;
+}
+
+async function request<T>(path: string, options: RequestInit = {}, retryOnUnauthorized = true): Promise<T> {
   const token = getStoredToken();
   const response = await fetch(`${API_URL}${path}`, {
     ...options,
@@ -37,9 +66,14 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     }
   });
 
+  if (response.status === 401 && retryOnUnauthorized && token && path !== "/api/auth/refresh") {
+    await refreshAccessToken();
+    return request<T>(path, options, false);
+  }
+
   if (!response.ok) {
     const payload = (await response.json().catch(() => null)) as { error?: string } | null;
-    throw new Error(payload?.error ?? `Request failed with ${response.status}`);
+    throw new ApiError(payload?.error ?? `Request failed with ${response.status}`, response.status);
   }
 
   if (response.status === 204) {
@@ -70,6 +104,8 @@ export const api = {
     fullName: string;
     email: string;
     password: string;
+    country?: string;
+    timezone?: string;
     defaultLocation?: { name: string; country: string; latitude: number; longitude: number; timezone: string };
   }) {
     const payload = await request<AuthPayload>("/api/auth/register/individual", {
@@ -86,6 +122,7 @@ export const api = {
     password: string;
     country: string;
     timezone: string;
+    industry?: string;
   }) {
     const payload = await request<AuthPayload>("/api/auth/register/organisation", {
       method: "POST",
@@ -137,5 +174,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ email, role })
     }),
-  auditLogs: () => request<AuditLog[]>("/api/audit-logs")
+  auditLogs: () => request<AuditLog[]>("/api/audit-logs"),
+  searchLocations: (query: string, countryCode?: string) => {
+    const params = new URLSearchParams({ q: query });
+    if (countryCode) {
+      params.set("countryCode", countryCode);
+    }
+    return request<{ provider: string; attribution: string; results: LocationResult[] }>(`/api/locations/search?${params.toString()}`);
+  }
 };

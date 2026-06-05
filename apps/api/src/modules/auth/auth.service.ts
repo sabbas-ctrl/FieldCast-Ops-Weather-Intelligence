@@ -1,9 +1,10 @@
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import type { MemberRole, Units } from "@prisma/client";
 import { env, isProduction } from "../../config/env.js";
+import { prisma } from "../../infrastructure/prisma/client.js";
 import { signAccessToken, signRefreshToken } from "../../middleware/auth.js";
-import { createAuditLog, createDefaultRulesForSite, publicMember, store } from "../demo/store.js";
-import type { MemberRole, Session, Site, Units } from "../demo/store.js";
+import { createAuditLog, createDefaultRulesForSite, publicMember, publicMembers } from "../db/helpers.js";
 import { HttpError } from "../../utils/http.js";
 import { createId, hashToken } from "../../utils/id.js";
 
@@ -28,27 +29,27 @@ function normalizeEmail(email: string) {
   return email.trim().toLowerCase();
 }
 
-function serializeAuth(userId: string, memberId: string) {
-  const user = store.users.find((candidate) => candidate.id === userId);
-  const member = store.members.find((candidate) => candidate.id === memberId);
+async function serializeAuth(userId: string, memberId: string) {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  const member = await prisma.workspaceMember.findUnique({ where: { id: memberId } });
   if (!user || !member) {
     throw new HttpError(401, "Invalid auth session");
   }
 
-  const workspace = store.workspaces.find((candidate) => candidate.id === member.workspaceId);
+  const workspace = await prisma.workspace.findUnique({ where: { id: member.workspaceId } });
   if (!workspace) {
     throw new HttpError(401, "Workspace not found");
   }
 
-  const memberships = store.members
-    .filter((candidate) => candidate.userId === user.id)
-    .map((candidate) => {
-      const candidateWorkspace = store.workspaces.find((workspaceItem) => workspaceItem.id === candidate.workspaceId);
-      return {
-        ...publicMember(candidate),
-        workspace: candidateWorkspace ?? null
-      };
-    });
+  const membershipRows = await prisma.workspaceMember.findMany({
+    where: { userId: user.id },
+    orderBy: { joinedAt: "asc" }
+  });
+  const publicMemberships = await publicMembers(membershipRows);
+  const workspaces = await prisma.workspace.findMany({
+    where: { id: { in: membershipRows.map((candidate) => candidate.workspaceId) } }
+  });
+  const workspaceById = new Map(workspaces.map((candidate) => [candidate.id, candidate]));
 
   return {
     user: {
@@ -58,12 +59,15 @@ function serializeAuth(userId: string, memberId: string) {
       status: user.status
     },
     workspace,
-    member: publicMember(member),
-    memberships
+    member: await publicMember(member),
+    memberships: publicMemberships.map((candidate) => ({
+      ...candidate,
+      workspace: workspaceById.get(candidate.workspaceId) ?? null
+    }))
   };
 }
 
-function createSession(input: CreateSessionInput) {
+async function createSession(input: CreateSessionInput) {
   const sessionId = createId("ses");
   const refreshToken = signRefreshToken({
     userId: input.userId,
@@ -71,15 +75,15 @@ function createSession(input: CreateSessionInput) {
     sessionId
   });
 
-  const session: Session = {
-    id: sessionId,
-    userId: input.userId,
-    memberId: input.memberId,
-    refreshHash: hashToken(refreshToken),
-    expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 14).toISOString(),
-    createdAt: new Date().toISOString()
-  };
-  store.sessions.push(session);
+  await prisma.session.create({
+    data: {
+      id: sessionId,
+      userId: input.userId,
+      memberId: input.memberId,
+      refreshHash: hashToken(refreshToken),
+      expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 14)
+    }
+  });
 
   const accessToken = signAccessToken(input);
   return { accessToken, refreshToken };
@@ -90,6 +94,8 @@ export async function registerIndividual(input: {
   email: string;
   password: string;
   preferredUnits: Units;
+  country?: string;
+  timezone?: string;
   defaultLocation?: {
     name: string;
     country: string;
@@ -99,65 +105,63 @@ export async function registerIndividual(input: {
   };
 }) {
   const email = normalizeEmail(input.email);
-  if (store.users.some((user) => user.email === email)) {
+  const existingUser = await prisma.user.findUnique({ where: { email } });
+  if (existingUser) {
     throw new HttpError(409, "Email is already registered");
   }
 
   const userId = createId("usr");
   const workspaceId = createId("wks");
   const memberId = createId("mem");
-  const createdAt = new Date().toISOString();
   const passwordHash = await bcrypt.hash(input.password, 10);
 
-  store.users.push({
-    id: userId,
-    fullName: input.fullName,
-    email,
-    passwordHash,
-    status: "ACTIVE",
-    createdAt
-  });
-
-  store.workspaces.push({
-    id: workspaceId,
-    name: `${input.fullName}'s Workspace`,
-    type: "PERSONAL",
-    providerMode: "PLATFORM_MANAGED",
-    timezone: input.defaultLocation?.timezone ?? "UTC",
-    country: input.defaultLocation?.country,
-    createdAt
-  });
-
-  store.members.push({
-    id: memberId,
-    workspaceId,
-    userId,
-    role: "PERSONAL_OWNER",
-    weatherUsageEnabled: true,
-    status: "ACTIVE",
-    joinedAt: createdAt
+  await prisma.user.create({
+    data: {
+      id: userId,
+      fullName: input.fullName,
+      email,
+      passwordHash,
+      memberships: {
+        create: {
+          id: memberId,
+          workspace: {
+            create: {
+              id: workspaceId,
+              name: `${input.fullName}'s Workspace`,
+              type: "PERSONAL",
+              providerMode: "PLATFORM_MANAGED",
+              timezone: input.timezone ?? input.defaultLocation?.timezone ?? "UTC",
+              country: input.country ?? input.defaultLocation?.country
+            }
+          },
+          role: "PERSONAL_OWNER",
+          weatherUsageEnabled: true,
+          status: "ACTIVE"
+        }
+      }
+    }
   });
 
   if (input.defaultLocation) {
-    const site: Site = {
-      id: createId("site"),
-      workspaceId,
-      name: input.defaultLocation.name,
-      siteType: "FIELD_WORK_SITE",
-      country: input.defaultLocation.country,
-      latitude: input.defaultLocation.latitude,
-      longitude: input.defaultLocation.longitude,
-      timezone: input.defaultLocation.timezone,
-      units: input.preferredUnits,
-      monitoringEnabled: false,
-      createdBy: memberId,
-      createdAt
-    };
-    store.sites.push(site);
-    createDefaultRulesForSite(workspaceId, site.id, memberId);
+    const site = await prisma.site.create({
+      data: {
+        id: createId("site"),
+        workspaceId,
+        name: input.defaultLocation.name,
+        siteType: "FIELD_WORK_SITE",
+        country: input.defaultLocation.country,
+        latitude: input.defaultLocation.latitude,
+        longitude: input.defaultLocation.longitude,
+        timezone: input.defaultLocation.timezone,
+        units: input.preferredUnits,
+        monitoringEnabled: false,
+        createdBy: memberId
+      }
+    });
+    await createDefaultRulesForSite(workspaceId, site.id, memberId);
   }
 
-  createAuditLog({
+  await createAuditLog({
     workspaceId,
     actorMemberId: memberId,
     action: "auth.register_individual",
@@ -165,10 +169,10 @@ export async function registerIndividual(input: {
     targetId: workspaceId
   });
 
-  const tokens = createSession({ userId, memberId, workspaceId, role: "PERSONAL_OWNER" });
+  const tokens = await createSession({ userId, memberId, workspaceId, role: "PERSONAL_OWNER" });
   return {
     ...tokens,
-    ...serializeAuth(userId, memberId)
+    ...(await serializeAuth(userId, memberId))
   };
 }
 
@@ -182,46 +186,44 @@ export async function registerOrganisation(input: {
   timezone: string;
 }) {
   const email = normalizeEmail(input.adminEmail);
-  if (store.users.some((user) => user.email === email)) {
+  const existingUser = await prisma.user.findUnique({ where: { email } });
+  if (existingUser) {
     throw new HttpError(409, "Email is already registered");
   }
 
   const userId = createId("usr");
   const workspaceId = createId("wks");
   const memberId = createId("mem");
-  const createdAt = new Date().toISOString();
   const passwordHash = await bcrypt.hash(input.password, 10);
 
-  store.users.push({
-    id: userId,
-    fullName: input.adminFullName,
-    email,
-    passwordHash,
-    status: "ACTIVE",
-    createdAt
+  await prisma.user.create({
+    data: {
+      id: userId,
+      fullName: input.adminFullName,
+      email,
+      passwordHash,
+      memberships: {
+        create: {
+          id: memberId,
+          workspace: {
+            create: {
+              id: workspaceId,
+              name: input.organisationName,
+              type: "ORGANISATION",
+              providerMode: "ORGANISATION_CONNECTED",
+              country: input.country,
+              timezone: input.timezone
+            }
+          },
+          role: "ORG_OWNER",
+          weatherUsageEnabled: true,
+          status: "ACTIVE"
+        }
+      }
+    }
   });
 
-  store.workspaces.push({
-    id: workspaceId,
-    name: input.organisationName,
-    type: "ORGANISATION",
-    providerMode: "ORGANISATION_CONNECTED",
-    country: input.country,
-    timezone: input.timezone,
-    createdAt
-  });
-
-  store.members.push({
-    id: memberId,
-    workspaceId,
-    userId,
-    role: "ORG_OWNER",
-    weatherUsageEnabled: true,
-    status: "ACTIVE",
-    joinedAt: createdAt
-  });
-
-  createAuditLog({
+  await createAuditLog({
     workspaceId,
     actorMemberId: memberId,
     action: "auth.register_organisation",
@@ -230,43 +232,43 @@ export async function registerOrganisation(input: {
     metadataJson: { industry: input.industry ?? "unspecified" }
   });
 
-  const tokens = createSession({ userId, memberId, workspaceId, role: "ORG_OWNER" });
+  const tokens = await createSession({ userId, memberId, workspaceId, role: "ORG_OWNER" });
   return {
     ...tokens,
-    ...serializeAuth(userId, memberId)
+    ...(await serializeAuth(userId, memberId))
   };
 }
 
 export async function login(input: { email: string; password: string; workspaceId?: string }) {
   const email = normalizeEmail(input.email);
-  const user = store.users.find((candidate) => candidate.email === email);
+  const user = await prisma.user.findUnique({ where: { email } });
   if (!user || !(await bcrypt.compare(input.password, user.passwordHash))) {
     throw new HttpError(401, "Invalid email or password");
   }
 
-  const memberships = store.members.filter(
-    (member) => member.userId === user.id && member.status === "ACTIVE"
-  );
+  const memberships = await prisma.workspaceMember.findMany({
+    where: { userId: user.id, status: "ACTIVE" },
+    include: { workspace: true },
+    orderBy: { joinedAt: "asc" }
+  });
+
   const selectedMember =
     (input.workspaceId
       ? memberships.find((member) => member.workspaceId === input.workspaceId)
-      : memberships.find((member) => {
-          const workspace = store.workspaces.find((candidate) => candidate.id === member.workspaceId);
-          return workspace?.type === "ORGANISATION";
-        })) ?? memberships[0];
+      : memberships.find((member) => member.workspace.type === "ORGANISATION")) ?? memberships[0];
 
   if (!selectedMember) {
     throw new HttpError(403, "No active workspace membership found");
   }
 
-  const tokens = createSession({
+  const tokens = await createSession({
     userId: user.id,
     memberId: selectedMember.id,
     workspaceId: selectedMember.workspaceId,
     role: selectedMember.role
   });
 
-  createAuditLog({
+  await createAuditLog({
     workspaceId: selectedMember.workspaceId,
     actorMemberId: selectedMember.id,
     action: "auth.login",
@@ -276,11 +278,11 @@ export async function login(input: { email: string; password: string; workspaceI
 
   return {
     ...tokens,
-    ...serializeAuth(user.id, selectedMember.id)
+    ...(await serializeAuth(user.id, selectedMember.id))
   };
 }
 
-export function refresh(refreshToken?: string) {
+export async function refresh(refreshToken?: string) {
   if (!refreshToken) {
     throw new HttpError(401, "Refresh cookie missing");
   }
@@ -291,13 +293,18 @@ export function refresh(refreshToken?: string) {
       memberId: string;
       sessionId: string;
     };
-    const session = store.sessions.find((candidate) => candidate.id === decoded.sessionId);
-    if (!session || session.revokedAt || session.refreshHash !== hashToken(refreshToken)) {
+    const session = await prisma.session.findUnique({ where: { id: decoded.sessionId } });
+    if (
+      !session ||
+      session.revokedAt ||
+      session.expiresAt.getTime() < Date.now() ||
+      session.refreshHash !== hashToken(refreshToken)
+    ) {
       throw new HttpError(401, "Refresh session is no longer valid");
     }
 
-    const member = store.members.find((candidate) => candidate.id === decoded.memberId);
-    if (!member || member.status !== "ACTIVE") {
+    const member = await prisma.workspaceMember.findUnique({ where: { id: decoded.memberId } });
+    if (!member || member.status !== "ACTIVE" || member.userId !== decoded.userId) {
       throw new HttpError(401, "Workspace membership is not active");
     }
 
@@ -310,7 +317,7 @@ export function refresh(refreshToken?: string) {
 
     return {
       accessToken,
-      ...serializeAuth(decoded.userId, decoded.memberId)
+      ...(await serializeAuth(decoded.userId, decoded.memberId))
     };
   } catch (error) {
     if (error instanceof HttpError) {
@@ -320,15 +327,15 @@ export function refresh(refreshToken?: string) {
   }
 }
 
-export function me(userId: string, memberId: string) {
+export async function me(userId: string, memberId: string) {
   return serializeAuth(userId, memberId);
 }
 
-export function logout(refreshToken?: string) {
+export async function logout(refreshToken?: string) {
   if (refreshToken) {
-    const session = store.sessions.find((candidate) => candidate.refreshHash === hashToken(refreshToken));
-    if (session) {
-      session.revokedAt = new Date().toISOString();
-    }
+    await prisma.session.updateMany({
+      where: { refreshHash: hashToken(refreshToken), revokedAt: null },
+      data: { revokedAt: new Date() }
+    });
   }
 }

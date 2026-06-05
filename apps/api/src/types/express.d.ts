@@ -1,4 +1,4 @@
-import type { MemberRole } from "../modules/demo/store.js";
+import type { MemberRole } from "@prisma/client";
 
 declare global {
   namespace Express {
