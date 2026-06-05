@@ -10,9 +10,10 @@ router.get(
   asyncHandler(async (request, response) => {
     const query = z
       .object({
-        q: z.string().default(""),
-        countryCode: z.string().optional()
+        q: z.string().trim().default(""),
+        countryCode: z.string().trim().length(2).optional()
       })
+      .strict()
       .parse(request.query);
 
     response.json(await searchLocations(query.q, query.countryCode));

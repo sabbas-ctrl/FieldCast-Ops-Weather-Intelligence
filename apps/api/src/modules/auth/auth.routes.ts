@@ -16,28 +16,31 @@ import {
 const router = Router();
 
 const passwordSchema = z.string().min(8);
+const optionalText = z.string().trim().min(1).optional();
 
 router.post(
   "/register/individual",
   asyncHandler(async (request, response) => {
     const body = z
       .object({
-        fullName: z.string().min(2),
-        email: z.string().email(),
+        fullName: z.string().trim().min(2),
+        email: z.string().trim().toLowerCase().email(),
         password: passwordSchema,
         preferredUnits: z.enum(["METRIC", "IMPERIAL"]).default("METRIC"),
-        country: z.string().min(2).optional(),
-        timezone: z.string().min(2).optional(),
+        country: optionalText,
+        timezone: optionalText,
         defaultLocation: z
           .object({
-            name: z.string().min(2),
-            country: z.string().min(2),
-            latitude: z.number(),
-            longitude: z.number(),
-            timezone: z.string().default("UTC")
+            name: z.string().trim().min(2),
+            country: z.string().trim().min(2),
+            latitude: z.number().min(-90).max(90),
+            longitude: z.number().min(-180).max(180),
+            timezone: z.string().trim().min(1).default("UTC")
           })
+          .strict()
           .optional()
       })
+      .strict()
       .parse(request.body);
 
     const result = await registerIndividual(body);
@@ -51,14 +54,15 @@ router.post(
   asyncHandler(async (request, response) => {
     const body = z
       .object({
-        organisationName: z.string().min(2),
-        industry: z.string().optional(),
-        adminFullName: z.string().min(2),
-        adminEmail: z.string().email(),
+        organisationName: z.string().trim().min(2),
+        industry: optionalText,
+        adminFullName: z.string().trim().min(2),
+        adminEmail: z.string().trim().toLowerCase().email(),
         password: passwordSchema,
-        country: z.string().min(2),
-        timezone: z.string().default("UTC")
+        country: z.string().trim().min(2),
+        timezone: z.string().trim().min(1).default("UTC")
       })
+      .strict()
       .parse(request.body);
 
     const result = await registerOrganisation(body);
@@ -72,10 +76,11 @@ router.post(
   asyncHandler(async (request, response) => {
     const body = z
       .object({
-        email: z.string().email(),
+        email: z.string().trim().toLowerCase().email(),
         password: passwordSchema,
         workspaceId: z.string().optional()
       })
+      .strict()
       .parse(request.body);
 
     const result = await login(body);

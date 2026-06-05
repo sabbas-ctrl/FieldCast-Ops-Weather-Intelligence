@@ -216,7 +216,7 @@ export const api = {
       body: JSON.stringify({ enabled })
     }),
   invite: (workspaceId: string, email: string, role: string) =>
-    request<{ inviteLink: string }>(`/api/workspaces/${workspaceId}/invitations`, {
+    request<{ inviteLink: string; emailDelivery?: { id?: string; skipped: boolean; reason?: string } }>(`/api/workspaces/${workspaceId}/invitations`, {
       method: "POST",
       body: JSON.stringify({ email, role })
     }),

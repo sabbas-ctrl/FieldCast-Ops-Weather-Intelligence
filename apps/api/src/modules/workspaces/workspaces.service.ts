@@ -2,6 +2,7 @@ import bcrypt from "bcryptjs";
 import { z } from "zod";
 import type { MemberRole } from "@prisma/client";
 import { env } from "../../config/env.js";
+import { invitationEmail, sendEmail } from "../../infrastructure/email/resend.js";
 import { prisma } from "../../infrastructure/prisma/client.js";
 import { HttpError } from "../../utils/http.js";
 import { createId, hashToken } from "../../utils/id.js";
@@ -130,12 +131,21 @@ export async function inviteMember(
   input: { email: string; role: MemberRole }
 ) {
   assertWorkspaceAccess(authWorkspaceId, workspaceId);
+  const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId } });
+  if (!workspace || workspace.type !== "ORGANISATION") {
+    throw new HttpError(400, "Invitations are only available for organisation workspaces");
+  }
+  const actor = await prisma.workspaceMember.findUnique({
+    where: { id: actorMemberId },
+    include: { user: { select: { fullName: true } } }
+  });
   const token = createId("inv");
+  const inviteLink = `${env.WEB_APP_URL.replace(/\/$/, "")}/invite/${token}`;
   const invitation = await prisma.invitation.create({
     data: {
       id: createId("ivt"),
       workspaceId,
-      email: input.email.toLowerCase(),
+      email: input.email,
       role: input.role,
       tokenHash: hashToken(token),
       expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 7),
@@ -152,6 +162,20 @@ export async function inviteMember(
     metadataJson: { email: input.email, role: input.role }
   });
 
+  const message = invitationEmail({
+    workspaceName: workspace.name,
+    role: invitation.role,
+    inviteLink,
+    inviterName: actor?.user.fullName
+  });
+  const emailDelivery = await sendEmail({
+    to: invitation.email,
+    subject: message.subject,
+    html: message.html,
+    text: message.text,
+    idempotencyKey: `invitation:${invitation.id}`
+  });
+
   return {
     invitation: {
       id: invitation.id,
@@ -162,7 +186,8 @@ export async function inviteMember(
       acceptedAt: invitation.acceptedAt,
       createdAt: invitation.createdAt
     },
-    inviteLink: `${env.WEB_APP_URL.replace(/\/$/, "")}/invite/${token}`
+    inviteLink,
+    emailDelivery
   };
 }
 

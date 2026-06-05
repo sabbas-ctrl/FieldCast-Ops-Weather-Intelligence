@@ -4,13 +4,15 @@ import { HttpError } from "../../utils/http.js";
 import { createId } from "../../utils/id.js";
 import { createAuditLog } from "../db/helpers.js";
 
-export const ruleInputSchema = z.object({
-  hazardType: z.enum(["RAIN", "HIGH_TEMPERATURE", "HIGH_WIND", "FROST"]),
-  mediumThreshold: z.number(),
-  highThreshold: z.number(),
-  enabled: z.boolean().default(true),
-  recommendation: z.string().min(8)
-});
+export const ruleInputSchema = z
+  .object({
+    hazardType: z.enum(["RAIN", "HIGH_TEMPERATURE", "HIGH_WIND", "FROST"]),
+    mediumThreshold: z.number(),
+    highThreshold: z.number(),
+    enabled: z.boolean().default(true),
+    recommendation: z.string().trim().min(8)
+  })
+  .strict();
 
 async function assertSite(workspaceId: string, siteId: string) {
   const site = await prisma.site.findFirst({ where: { workspaceId, id: siteId } });

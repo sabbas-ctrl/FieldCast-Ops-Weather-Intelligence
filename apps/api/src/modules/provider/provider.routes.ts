@@ -35,7 +35,7 @@ router.post(
   "/connect",
   requirePermission("provider.connect"),
   asyncHandler(async (request, response) => {
-    const body = z.object({ apiKey: apiKeySchema }).parse(request.body);
+    const body = z.object({ apiKey: apiKeySchema }).strict().parse(request.body);
     response.status(201).json(await connectProvider(request.auth!.workspaceId, request.auth!.memberId, body.apiKey));
   })
 );
@@ -52,7 +52,7 @@ router.put(
   "/key",
   requirePermission("provider.replace_key"),
   asyncHandler(async (request, response) => {
-    const body = z.object({ apiKey: apiKeySchema }).parse(request.body);
+    const body = z.object({ apiKey: apiKeySchema }).strict().parse(request.body);
     response.json(await connectProvider(request.auth!.workspaceId, request.auth!.memberId, body.apiKey));
   })
 );

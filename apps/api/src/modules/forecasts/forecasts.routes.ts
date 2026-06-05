@@ -21,7 +21,7 @@ router.get(
   "/:siteId/forecast",
   requirePermission("monitoring.run"),
   asyncHandler(async (request, response) => {
-    const query = z.object({ days: z.coerce.number().min(1).max(16).default(2) }).parse(request.query);
+    const query = z.object({ days: z.coerce.number().min(1).max(16).default(2) }).strict().parse(request.query);
     response.json(await getForecast(request.auth!.workspaceId, request.auth!.memberId, routeParam(request.params.siteId, "siteId"), query.days));
   })
 );
@@ -30,7 +30,7 @@ router.post(
   "/:siteId/analyse-working-windows",
   requirePermission("monitoring.run"),
   asyncHandler(async (request, response) => {
-    const body = z.object({ days: z.number().min(1).max(16).default(2) }).parse(request.body ?? {});
+    const body = z.object({ days: z.number().min(1).max(16).default(2) }).strict().parse(request.body ?? {});
     response.json(await analyseWorkingWindows(request.auth!.workspaceId, request.auth!.memberId, routeParam(request.params.siteId, "siteId"), body.days));
   })
 );

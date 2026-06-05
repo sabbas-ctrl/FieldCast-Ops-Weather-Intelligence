@@ -19,18 +19,20 @@ import {
 
 const router = Router();
 
-const coordinateQuery = z.object({
-  siteId: z.string().optional(),
-  lat: z.coerce.number().optional(),
-  lon: z.coerce.number().optional(),
-  days: z.coerce.number().min(1).max(16).optional(),
-  ai: z
-    .enum(["true", "false"])
-    .optional()
-    .transform((value) => value === "true"),
-  units: z.enum(["metric", "imperial"]).optional(),
-  lang: z.string().min(2).max(8).optional()
-});
+const coordinateQuery = z
+  .object({
+    siteId: z.string().trim().min(1).optional(),
+    lat: z.coerce.number().min(-90).max(90).optional(),
+    lon: z.coerce.number().min(-180).max(180).optional(),
+    days: z.coerce.number().min(1).max(16).optional(),
+    ai: z
+      .enum(["true", "false"])
+      .optional()
+      .transform((value) => value === "true"),
+    units: z.enum(["metric", "imperial"]).optional(),
+    lang: z.string().trim().min(2).max(8).optional()
+  })
+  .strict();
 
 router.use(requireAuth);
 
@@ -73,7 +75,7 @@ router.get(
   "/weather-geo",
   requirePermission("monitoring.run"),
   asyncHandler(async (request, response) => {
-    const query = coordinateQuery.extend({ ip: z.string().optional() }).parse(request.query);
+    const query = coordinateQuery.extend({ ip: z.string().trim().min(2).optional() }).parse(request.query);
     response.json(
       await callWeatherEndpoint(request.auth!.workspaceId, request.auth!.memberId, {
         service: "weatherGeo",
@@ -87,7 +89,7 @@ router.get(
   "/ip-lookup",
   requirePermission("monitoring.run"),
   asyncHandler(async (request, response) => {
-    const query = z.object({ ip: z.string().default("auto") }).parse(request.query);
+    const query = z.object({ ip: z.string().trim().default("auto") }).strict().parse(request.query);
     response.json(await lookupIp(request.auth!.workspaceId, request.auth!.memberId, query.ip));
   })
 );
@@ -106,13 +108,14 @@ router.post(
   asyncHandler(async (request, response) => {
     const body = z
       .object({
-        url: z.string().url(),
-        siteId: z.string().optional(),
-        lat: z.number().optional(),
-        lon: z.number().optional(),
+        url: z.string().trim().url(),
+        siteId: z.string().trim().min(1).optional(),
+        lat: z.number().min(-90).max(90).optional(),
+        lon: z.number().min(-180).max(180).optional(),
         triggers: z.array(z.enum(["rain", "extreme_wind", "frost", "drought"])).min(1),
-        timezone: z.string().optional()
+        timezone: z.string().trim().min(1).optional()
       })
+      .strict()
       .parse(request.body);
     response.status(201).json(await createWebhook(request.auth!.workspaceId, request.auth!.memberId, body));
   })
@@ -134,11 +137,12 @@ router.post(
   asyncHandler(async (request, response) => {
     const body = z
       .object({
-        to: z.string().min(6),
-        message: z.string().min(1).max(480),
-        type: z.string().optional(),
-        pilotTag: z.string().optional()
+        to: z.string().trim().min(6),
+        message: z.string().trim().min(1).max(480),
+        type: z.string().trim().min(1).optional(),
+        pilotTag: z.string().trim().min(1).optional()
       })
+      .strict()
       .parse(request.body);
     response.json(
       await callSmsEndpoint(request.auth!.workspaceId, request.auth!.memberId, {
@@ -156,10 +160,11 @@ router.post(
   asyncHandler(async (request, response) => {
     const body = z
       .object({
-        to: z.string().min(6),
+        to: z.string().trim().min(6),
         alertType: z.enum(["rain", "frost", "extreme_wind", "drought"]),
         data: z.record(z.unknown()).optional()
       })
+      .strict()
       .parse(request.body);
     response.json(
       await callSmsEndpoint(request.auth!.workspaceId, request.auth!.memberId, {
@@ -177,11 +182,12 @@ router.post(
   asyncHandler(async (request, response) => {
     const body = z
       .object({
-        phone: z.string().min(6),
-        name: z.string().min(1),
-        location: z.string().optional(),
-        cropType: z.string().optional()
+        phone: z.string().trim().min(6),
+        name: z.string().trim().min(1),
+        location: z.string().trim().min(1).optional(),
+        cropType: z.string().trim().min(1).optional()
       })
+      .strict()
       .parse(request.body);
     response.json(
       await callSmsEndpoint(request.auth!.workspaceId, request.auth!.memberId, {
@@ -213,7 +219,10 @@ router.get(
   "/trees/history",
   requirePermission("monitoring.run"),
   asyncHandler(async (request, response) => {
-    const query = z.object({ limit: z.coerce.number().min(1).max(100).optional(), cursor: z.string().optional() }).parse(request.query);
+    const query = z
+      .object({ limit: z.coerce.number().min(1).max(100).optional(), cursor: z.string().trim().min(1).optional() })
+      .strict()
+      .parse(request.query);
     response.json(await getTreeHistory(request.auth!.workspaceId, request.auth!.memberId, query.limit, query.cursor));
   })
 );

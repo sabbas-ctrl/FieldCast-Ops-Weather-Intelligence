@@ -23,8 +23,10 @@ const envSchema = z.object({
     .string()
     .default("FieldCastOpsWeatherIntelligence/0.1 (development; contact: noreply@visionindex.studio)"),
   PHOTON_BASE_URL: z.string().url().default("https://photon.komoot.io"),
+  RESEND_API_URL: z.string().url().default("https://api.resend.com"),
   RESEND_API_KEY: z.string().optional(),
-  RESEND_FROM: z.string().optional()
+  RESEND_FROM: z.string().optional(),
+  RESEND_REPLY_TO: z.string().email().optional()
 });
 
 export const env = envSchema.parse(process.env);

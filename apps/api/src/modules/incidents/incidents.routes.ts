@@ -19,6 +19,7 @@ router.get(
         status: z.enum(["OPEN", "ACKNOWLEDGED", "RESOLVED", "DISMISSED"]).optional(),
         severity: z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"]).optional()
       })
+      .strict()
       .parse(request.query);
     response.json(await listIncidents(request.auth!.workspaceId, query));
   })

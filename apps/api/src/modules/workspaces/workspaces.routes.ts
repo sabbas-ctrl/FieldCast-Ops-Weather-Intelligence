@@ -37,9 +37,10 @@ router.post(
   asyncHandler(async (request, response) => {
     const body = z
       .object({
-        email: z.string().email(),
+        email: z.string().trim().toLowerCase().email(),
         role: memberRoleSchema
       })
+      .strict()
       .parse(request.body);
     response.status(201).json(await inviteMember(request.auth!.workspaceId, request.auth!.memberId, routeParam(request.params.workspaceId, "workspaceId"), body));
   })
@@ -49,7 +50,7 @@ router.patch(
   "/:workspaceId/members/:memberId/usage-access",
   requirePermission("members.revoke"),
   asyncHandler(async (request, response) => {
-    const body = z.object({ enabled: z.boolean() }).parse(request.body);
+    const body = z.object({ enabled: z.boolean() }).strict().parse(request.body);
     response.json(
       await setWeatherUsageAccess(
         request.auth!.workspaceId,

@@ -10,9 +10,10 @@ router.post(
   asyncHandler(async (request, response) => {
     const body = z
       .object({
-        fullName: z.string().min(2),
+        fullName: z.string().trim().min(2),
         password: z.string().min(8)
       })
+      .strict()
       .parse(request.body);
     response.status(201).json(await acceptInvitation({ token: routeParam(request.params.token, "token"), ...body }));
   })

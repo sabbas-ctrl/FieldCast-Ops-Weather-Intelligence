@@ -651,6 +651,7 @@ export function App() {
   const [siteTimezone, setSiteTimezone] = useState("Asia/Karachi");
   const [siteType, setSiteType] = useState<Site["siteType"]>("FIELD_WORK_SITE");
   const [inviteLink, setInviteLink] = useState<string | null>(null);
+  const [inviteEmailStatus, setInviteEmailStatus] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const selectedSiteIdRef = useRef("");
   const loadedRulesForSiteIdRef = useRef("");
@@ -698,6 +699,8 @@ export function App() {
     setUsage(null);
     setMembers([]);
     setAuditLogs([]);
+    setInviteLink(null);
+    setInviteEmailStatus(null);
   }
 
   async function searchSiteLocation() {
@@ -1889,6 +1892,11 @@ export function App() {
                     const form = new FormData(event.currentTarget);
                     const result = await api.invite(auth.workspace.id, String(form.get("email")), String(form.get("role")));
                     setInviteLink(result.inviteLink);
+                    setInviteEmailStatus(
+                      result.emailDelivery?.skipped
+                        ? `Email not sent: ${result.emailDelivery.reason ?? "Resend is not configured"}`
+                        : `Email sent${result.emailDelivery?.id ? ` (${result.emailDelivery.id})` : ""}`
+                    );
                     setAuditLogs(await api.auditLogs());
                   }}
                 >
@@ -1906,6 +1914,7 @@ export function App() {
                   <Button className="w-full" icon={<UserPlus size={17} />} type="submit" variant="primary">
                     Create Invite
                   </Button>
+                  {inviteEmailStatus ? <div className="rounded-md bg-blue-50 p-3 text-xs font-semibold text-ocean">{inviteEmailStatus}</div> : null}
                   {inviteLink ? <div className="break-all rounded-md bg-slate-100 p-3 text-xs font-semibold text-slate-600">{inviteLink}</div> : null}
                 </form>
               </Panel>

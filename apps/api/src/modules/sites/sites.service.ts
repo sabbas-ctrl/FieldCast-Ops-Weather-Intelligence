@@ -4,27 +4,29 @@ import { HttpError } from "../../utils/http.js";
 import { createId } from "../../utils/id.js";
 import { createAuditLog, createDefaultRulesForSite } from "../db/helpers.js";
 
-export const siteInputSchema = z.object({
-  name: z.string().min(2),
-  description: z.string().optional(),
-  siteType: z
-    .enum([
-      "FIELD_WORK_SITE",
-      "FARM_PLANTATION",
-      "CONSTRUCTION_SITE",
-      "DELIVERY_HUB",
-      "EVENT_VENUE",
-      "CAMPUS_OUTDOOR_FACILITY",
-      "OTHER"
-    ])
-    .default("FIELD_WORK_SITE"),
-  country: z.string().min(2),
-  latitude: z.number().min(-90).max(90),
-  longitude: z.number().min(-180).max(180),
-  timezone: z.string().default("UTC"),
-  units: z.enum(["METRIC", "IMPERIAL"]).default("METRIC"),
-  monitoringEnabled: z.boolean().default(false)
-});
+export const siteInputSchema = z
+  .object({
+    name: z.string().trim().min(2),
+    description: z.string().trim().optional(),
+    siteType: z
+      .enum([
+        "FIELD_WORK_SITE",
+        "FARM_PLANTATION",
+        "CONSTRUCTION_SITE",
+        "DELIVERY_HUB",
+        "EVENT_VENUE",
+        "CAMPUS_OUTDOOR_FACILITY",
+        "OTHER"
+      ])
+      .default("FIELD_WORK_SITE"),
+    country: z.string().trim().min(2),
+    latitude: z.number().min(-90).max(90),
+    longitude: z.number().min(-180).max(180),
+    timezone: z.string().trim().min(1).default("UTC"),
+    units: z.enum(["METRIC", "IMPERIAL"]).default("METRIC"),
+    monitoringEnabled: z.boolean().default(false)
+  })
+  .strict();
 
 export async function listSites(workspaceId: string) {
   const sites = await prisma.site.findMany({
