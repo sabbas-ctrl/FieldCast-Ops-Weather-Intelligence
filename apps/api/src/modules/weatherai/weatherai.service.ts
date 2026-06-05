@@ -50,7 +50,7 @@ const serviceCatalog: Record<
   weather: {
     label: "Current Weather + Forecast",
     path: "/v1/weather",
-    minimumPlan: "PRO"
+    minimumPlan: "FREE"
   },
   forecast: {
     label: "Forecast",
@@ -65,7 +65,7 @@ const serviceCatalog: Record<
   ipLookup: {
     label: "IP Geo Lookup",
     path: "/v1/ip-lookup",
-    minimumPlan: "FREE"
+    minimumPlan: "PRO"
   },
   usage: {
     label: "Usage",

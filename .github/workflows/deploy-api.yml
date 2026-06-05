@@ -20,8 +20,8 @@ on:
   workflow_dispatch:
 
 env:
-  DOCKERHUB_REPOSITORY: visionindex-frontend
-  IMAGE_TAG_PREFIX: backend
+  DOCKERHUB_REPOSITORY: ${{ vars.DOCKERHUB_REPOSITORY || 'visionindex-frontend' }}
+  IMAGE_TAG_PREFIX: ${{ vars.IMAGE_TAG_PREFIX || 'fieldcastops-backend' }}
 
 jobs:
   validate:
@@ -42,6 +42,7 @@ jobs:
   docker:
     needs: validate
     runs-on: ubuntu-latest
+    environment: production
     if: ${{ github.event_name != 'pull_request' }}
     steps:
       - uses: actions/checkout@v4

@@ -1,11 +1,63 @@
 # FieldCast Ops Weather Intelligence
 
-FieldCast Ops is a multi-tenant weather operations platform for site forecasts, operational risk rules, incident tracking, WeatherAI plan usage, invitations, and audit logs.
+WeatherAI developer-platform assignment submission by Sabbas Ahmad.
+
+FieldCast Ops is a multi-tenant weather operations platform that consumes WeatherAI APIs and turns raw forecast/provider data into operational decisions: 7-day forecast cards, hourly site weather, risk rules, working windows, incidents, provider quota, and plan-gated WeatherAI services.
+
+## Submission Links
+
+- Public GitHub repository: `TODO: paste public repository URL`
+- Live deployment: `TODO: paste deployed app URL`
+- WeatherAI documentation used: https://weather-ai.co/docs
+
+## Assignment Scope
+
+The assignment asked for a simple application integrating APIs from the WeatherAI developer platform. This implementation goes beyond a basic weather display and demonstrates a production-oriented integration pattern:
+
+- Personal users get platform-managed Free-plan WeatherAI access with no API key prompt.
+- Organisation users connect their own WeatherAI key, and the app gates functionality according to that key's active plan.
+- The backend owns WeatherAI credentials, validation, rate-aware caching, plan checks, and error handling.
+- The frontend presents WeatherAI data as useful operational UI instead of raw JSON.
 
 The app supports two workspace modes:
 
 - Personal workspaces use the platform-managed WeatherAI key from `WEATHERAI_PLATFORM_API_KEY` and expose Free-plan functionality to the user.
 - Organisation workspaces use the organisation's own WeatherAI key, stored encrypted in PostgreSQL, and enable services according to the active WeatherAI plan.
+
+## WeatherAI APIs Integrated
+
+The app uses WeatherAI's documented base URL `https://api.weather-ai.co` and Bearer API key authentication.
+
+Primary reviewer flow:
+
+- `GET /v1/forecast`: powers the Forecast page, rendered as 7-day cards plus today's hourly cards.
+- `GET /v1/usage`: resolves request/AI quota and active plan capabilities.
+
+Plan-aware service tools:
+
+- `GET /v1/weather`: current weather plus forecast utility.
+- `GET /v1/weather-geo`: IP or coordinate-aware weather/geo lookup.
+- `GET /v1/ip-lookup`: Pro+ IP geolocation utility.
+- `POST /v1/webhooks`, `GET /v1/webhooks`, `DELETE /v1/webhooks/:id`: Pro+ webhook subscription management.
+- `POST /v1/sms/send`, `POST /v1/sms/alert`, `POST /v1/sms/bomet/register`, `GET /v1/sms/stats`, `GET /v1/sms/health`: Scale + SMS-approved messaging tools.
+- `POST /v1/trees/analyze`, `GET /v1/trees/history`, `GET /v1/trees/quota`, `POST /v1/forestry/count-trees`: tree/forestry analysis tools.
+
+WeatherAI plan gates follow the docs:
+
+- Free: 1,000 requests/month, 200 AI requests/month, 7 forecast days, 5 tree analyses/month.
+- Pro: 50,000 requests/month, 10,000 AI requests/month, 14 forecast days, up to 10 webhooks, 100 tree analyses/month.
+- Scale: 500,000 requests/month, 100,000 AI requests/month, 16 forecast days, up to 50 webhooks, SMS/USSD after approval, unlimited tree analyses.
+
+## Reviewer Walkthrough
+
+1. Register an individual account.
+2. Search and select a real location during onboarding.
+3. Open `Forecast` and load the next 7 days for the site.
+4. Open `Sites`, add another searched global location, then run analysis.
+5. Open `Rules`, adjust rain/wind/heat thresholds, then run analysis again.
+6. Open `Incidents` to see generated high-risk weather incidents.
+7. Register an organisation account and connect a WeatherAI key in Provider Centre.
+8. Open `Services` to see WeatherAI utilities enabled or disabled according to the active plan.
 
 ## Current Features
 
@@ -282,6 +334,22 @@ The Docker image does not include production environment values. Provide them on
 
 The GitHub Actions workflow `.github/workflows/deploy-api.yml` validates the API and pushes the backend Docker image to Docker Hub.
 
+The Docker image publish job uses the GitHub Environment named:
+
+```text
+production
+```
+
+Add Docker Hub credentials as GitHub environment or repository secrets:
+
+- `DOCKERHUB_USERNAME`
+- `DOCKERHUB_TOKEN`
+
+Optional non-secret GitHub repository variables:
+
+- `DOCKERHUB_REPOSITORY` defaults to `visionindex-frontend`
+- `IMAGE_TAG_PREFIX` defaults to `fieldcastops-backend`
+
 It builds from:
 
 ```text
@@ -295,14 +363,31 @@ It pushes to the Docker Hub repository:
 <DOCKERHUB_USERNAME>/visionindex-frontend:backend-<git-sha>
 ```
 
-The Docker Hub repository can be private. Create it manually in Docker Hub as `visionindex-frontend`, set it to private, then add these GitHub repository secrets:
-
-- `DOCKERHUB_USERNAME`
-- `DOCKERHUB_TOKEN`
-
-Use a Docker Hub access token with read/write permission for that private repository.
+The Docker Hub repository can be private. Create it manually in Docker Hub as `visionindex-frontend`, set it to private, then add a Docker Hub access token with read/write permission. Do not commit Docker Hub credentials or production `.env` values to the repository.
 
 The workflow does not deploy or copy `.env` to the VPS. Production env stays on the VPS.
+
+## Vercel Frontend Deployment
+
+The frontend is configured for Vercel with the root-level `vercel.json`.
+
+Recommended Vercel import settings:
+
+- Framework Preset: `Vite`
+- Root Directory: repository root, not `apps/web`
+- Install Command: `npm ci`
+- Build Command: `npm run build --workspace apps/web`
+- Output Directory: `apps/web/dist`
+
+Set this Vercel environment variable for Production and Preview:
+
+```env
+VITE_API_URL=https://your-api-domain.example.com
+```
+
+If the API is not deployed yet, the Vercel frontend can still build, but login and WeatherAI calls will fail until `VITE_API_URL` points to a reachable backend.
+
+After deployment, copy the Vercel production URL into the `Submission Links` section near the top of this README.
 
 ## VPS Runtime Example
 
