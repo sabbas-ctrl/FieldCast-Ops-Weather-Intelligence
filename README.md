@@ -340,10 +340,10 @@ The Docker image publish job uses the GitHub Environment named:
 production
 ```
 
-Add Docker Hub credentials as GitHub environment or repository secrets:
+Add Docker Hub credentials/config in GitHub:
 
-- `DOCKERHUB_USERNAME`
-- `DOCKERHUB_TOKEN`
+- `DOCKERHUB_USERNAME`: GitHub repository/environment variable, or secret. Use your Docker Hub username, not your email address.
+- `DOCKERHUB_TOKEN`: GitHub repository/environment secret. Use the raw Docker Hub access token only.
 
 Optional non-secret GitHub repository variables:
 
@@ -363,7 +363,7 @@ It pushes to the Docker Hub repository:
 <DOCKERHUB_USERNAME>/visionindex-frontend:backend-<git-sha>
 ```
 
-The Docker Hub repository can be private. Create it manually in Docker Hub as `visionindex-frontend`, set it to private, then add a Docker Hub access token with read/write permission. Do not commit Docker Hub credentials or production `.env` values to the repository.
+The Docker Hub repository can be private. Create it manually in Docker Hub as `visionindex-frontend`, set it to private, then add a Docker Hub access token with read/write permission. Do not prefix it with `Bearer`, do not paste JSON, and do not commit Docker Hub credentials or production `.env` values to the repository.
 
 The workflow does not deploy or copy `.env` to the VPS. Production env stays on the VPS.
 
