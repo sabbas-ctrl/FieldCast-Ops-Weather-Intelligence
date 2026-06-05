@@ -9,7 +9,6 @@ RUN npm install
 FROM deps AS build
 COPY tsconfig.base.json ./
 COPY apps/api apps/api
-RUN npm run prisma:generate --workspace apps/api
 RUN npm run build --workspace apps/api
 
 FROM node:22-alpine AS runtime
